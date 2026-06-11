@@ -1,18 +1,24 @@
-# 뼈대만 — 서비스 4개 자리 예약. image/build는 S2(서버 3종)/S3(gateway)에서 Dockerfile과 함께 채운다.
+# gateway는 S3에서 채운다. 백엔드 3종은 워크스페이스 루트 컨텍스트로 빌드 (S2).
 services:
-  gateway:
-    # build: gateway/        (S3)
-    ports:
-      - "8000:8000"
+  # gateway: (S3에서 활성화 — build/image 없는 서비스는 compose 검증 실패)
+  #   build: gateway/
+  #   ports:
+  #     - "8000:8000"
   ticket-server:
-    # build: servers/ticket/ (S2)
+    build:
+      context: .
+      dockerfile: servers/ticket/Dockerfile
     ports:
       - "8101:8101"
   docs-server:
-    # build: servers/docs/   (S2)
+    build:
+      context: .
+      dockerfile: servers/docs/Dockerfile
     ports:
       - "8102:8102"
   ops-server:
-    # build: servers/ops/    (S2)
+    build:
+      context: .
+      dockerfile: servers/ops/Dockerfile
     ports:
       - "8103:8103"

@@ -2,6 +2,9 @@ CLAUDE.local.md
 .claude/settings.local.json
 .env
 
+# 로컬 TLS 인터셉터 CA (머신 종속 — certs/README.md 참고)
+certs/*.crt
+
 # Python
 .venv/
 __pycache__/

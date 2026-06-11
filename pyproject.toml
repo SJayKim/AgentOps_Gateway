@@ -15,6 +15,7 @@ members = ["gateway", "servers/*"]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "ruff>=0.8",
 ]
 
@@ -29,3 +30,4 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
