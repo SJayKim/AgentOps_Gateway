@@ -1,0 +1,31 @@
+[project]
+name = "agentops-gateway-workspace"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "agentops-gateway",
+    "ticket-server",
+    "docs-server",
+    "ops-server",
+]
+
+[tool.uv.workspace]
+members = ["gateway", "servers/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[tool.uv.sources]
+agentops-gateway = { workspace = true }
+ticket-server = { workspace = true }
+docs-server = { workspace = true }
+ops-server = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
