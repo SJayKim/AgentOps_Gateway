@@ -1,9 +1,20 @@
-# gateway는 S3에서 채운다. 백엔드 3종은 워크스페이스 루트 컨텍스트로 빌드 (S2).
+# 4서비스 — gateway(S3) + 백엔드 3종(S2). 전부 워크스페이스 루트 컨텍스트로 빌드.
 services:
-  # gateway: (S3에서 활성화 — build/image 없는 서비스는 compose 검증 실패)
-  #   build: gateway/
-  #   ports:
-  #     - "8000:8000"
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      BACKEND_TICKET_URL: http://ticket-server:8101/mcp
+      BACKEND_DOCS_URL: http://docs-server:8102/mcp
+      BACKEND_OPS_URL: http://ops-server:8103/mcp
+    # hard 의존 아님 — 기동 시 죽어 있는 백엔드는 지연 재집계로 처리
+    depends_on:
+      - ticket-server
+      - docs-server
+      - ops-server
   ticket-server:
     build:
       context: .
