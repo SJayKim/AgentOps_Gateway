@@ -10,6 +10,9 @@ services:
       BACKEND_TICKET_URL: http://ticket-server:8101/mcp
       BACKEND_DOCS_URL: http://docs-server:8102/mcp
       BACKEND_OPS_URL: http://ops-server:8103/mcp
+      # 데모값 — 실제 운영 secret은 레포에 두지 않는다 (README 참조)
+      GATEWAY_JWT_SECRET: demo-secret-do-not-use-in-prod
+      GATEWAY_AUDIT_PATH: /app/audit/audit.jsonl
     # hard 의존 아님 — 기동 시 죽어 있는 백엔드는 지연 재집계로 처리
     depends_on:
       - ticket-server

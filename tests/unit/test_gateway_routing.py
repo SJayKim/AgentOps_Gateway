@@ -6,6 +6,7 @@ import mcp.types as types
 
 from gateway import aggregate
 from gateway.errors import error_result
+from gateway.policy import Policy
 from gateway.routes import route_call
 
 
@@ -45,13 +46,36 @@ def test_prefixed_tools_keep_schema():
     assert tools[0].name == "t1"  # 원본 불변
 
 
+PERMIT_ALL = Policy({"test-agent": {"ticket": ["create_ticket"]}})
+
+
 async def test_route_call_unknown_tool_branches():
     backends = {"ticket": StubBackend("ticket", ["create_ticket"])}
     for bad in ("create_ticket", "unknown__x", "ticket__nonexistent"):
-        result = await route_call(backends, bad, {})
+        result, decision = await route_call(backends, PERMIT_ALL, "test-agent", bad, {})
         assert err_payload(result) == {"code": "UNKNOWN_TOOL", "tool": bad}, bad
-    ok = await route_call(backends, "ticket__create_ticket", {})
+        assert decision == "error"
+    ok, decision = await route_call(backends, PERMIT_ALL, "test-agent", "ticket__create_ticket", {})
     assert not ok.isError
+    assert decision == "allowed"
+
+
+async def test_route_call_resolves_tool_before_policy():
+    # 미존재 tool은 POLICY_DENIED가 아니라 UNKNOWN_TOOL — 평가 순서 고정 계약
+    backends = {"ticket": StubBackend("ticket", ["create_ticket"])}
+    result, decision = await route_call(
+        backends, PERMIT_ALL, "rogue-agent", "ticket__nonexistent", {}
+    )
+    assert err_payload(result)["code"] == "UNKNOWN_TOOL"
+    result, decision = await route_call(
+        backends, PERMIT_ALL, "rogue-agent", "ticket__create_ticket", {}
+    )
+    assert err_payload(result) == {
+        "code": "POLICY_DENIED",
+        "rule": "rogue-agent:ticket:create_ticket",
+        "agent": "rogue-agent",
+    }
+    assert decision == "denied"
 
 
 def test_error_result_payload_schema():
@@ -59,7 +83,7 @@ def test_error_result_payload_schema():
     cases = {
         ("UNKNOWN_TOOL",): {"tool": "x__y"},
         ("BACKEND_UNAVAILABLE",): {"server": "ops"},
-        ("POLICY_DENIED",): {"tool": "ops__get_metrics", "reason": "role"},
+        ("POLICY_DENIED",): {"rule": "support-agent:ops:query_logs", "agent": "support-agent"},
     }
     for (code,), fields in cases.items():
         result = error_result(code, **fields)

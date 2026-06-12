@@ -1,0 +1,17 @@
+# 권한 매트릭스 3×3의 직역 — default-deny: 미기재 (에이전트, tool) 조합은 전부 거부.
+# "읽기"는 검색/조회 tool, "읽기+쓰기"는 전체 tool.
+support-agent:
+  ticket: [create_ticket, search_tickets, update_status]
+  docs: [search_docs, read_doc]
+  # ops 미기재 = 전부 거부
+analyst-agent:
+  ticket: [search_tickets]
+  docs: [search_docs, read_doc]
+  ops:
+    - get_metrics
+    - tool: query_logs
+      max_range_hours: 24
+dev-agent:
+  ticket: [create_ticket, search_tickets, update_status]
+  docs: [search_docs, read_doc]
+  ops: [get_metrics, query_logs]
