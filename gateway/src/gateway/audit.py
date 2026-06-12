@@ -7,21 +7,20 @@ decision enum은 allowed|denied|auth_failed|error 4종 — S5 메트릭과 동�
 
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def record(path: str, *, agent: str, tool: str, args: dict, decision: str) -> None:
+def record(path: str, *, agent: str, tool: str, args: dict, decision: str, trace_id: str) -> None:
     line = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "tool": tool,
         "args_summary": json.dumps(args)[:256],
         "decision": decision,
-        "trace_id": str(uuid.uuid4()),  # S5에서 실제 trace로 대체
+        "trace_id": trace_id,  # OTel trace ID (32 hex) — 게이트웨이 로그와 일치
     }
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)

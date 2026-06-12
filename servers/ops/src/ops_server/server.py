@@ -1,10 +1,17 @@
 """ops-server — "민감 데이터" 역할 백엔드 (:8103)."""
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from ops_server import fake_data
 
 mcp = FastMCP("ops-server", host="0.0.0.0", port=8103)
+
+
+@mcp.custom_route("/health", methods=["GET"])  # compose healthcheck용 (S5 P4)
+async def health(request: Request) -> PlainTextResponse:
+    return PlainTextResponse("ok")
 
 
 @mcp.tool()

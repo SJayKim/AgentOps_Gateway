@@ -9,7 +9,7 @@ import json
 
 import mcp.types as types
 
-from gateway import aggregate
+from gateway import aggregate, observability
 from gateway.errors import error_result
 from gateway.policy import Policy
 from gateway.upstream import Backend
@@ -44,11 +44,13 @@ async def route_call(
             return error_result("BACKEND_UNAVAILABLE", server=server), "error"
     if tool not in {t.name for t in backend.tools or []}:
         return error_result("UNKNOWN_TOOL", tool=name), "error"
-    decision = policy.evaluate(agent, server, tool, arguments)
+    with observability.tracer().start_as_current_span("policy"):
+        decision = policy.evaluate(agent, server, tool, arguments)
     if not decision.allowed:
         fields = {"rule": decision.rule, "agent": agent}
         if decision.detail is not None:
             fields["detail"] = decision.detail
         return error_result("POLICY_DENIED", **fields), "denied"
-    result = await backend.call(tool, arguments)
+    with observability.tracer().start_as_current_span("backend_call"):
+        result = await backend.call(tool, arguments)
     return result, _relay_decision(result)

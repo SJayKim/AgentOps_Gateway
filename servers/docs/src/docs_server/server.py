@@ -1,10 +1,17 @@
 """docs-server — 읽기 전용 대표 백엔드 (:8102)."""
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from docs_server import search
 
 mcp = FastMCP("docs-server", host="0.0.0.0", port=8102)
+
+
+@mcp.custom_route("/health", methods=["GET"])  # compose healthcheck용 (S5 P4)
+async def health(request: Request) -> PlainTextResponse:
+    return PlainTextResponse("ok")
 
 
 @mcp.tool()

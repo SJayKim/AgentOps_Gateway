@@ -12,16 +12,17 @@ import contextlib
 import json
 import logging
 import os
+import time
 
 import mcp.types as types
 from fastapi import FastAPI
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.datastructures import Headers
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from gateway import aggregate, audit, auth, routes
+from gateway import aggregate, audit, auth, observability, routes
 from gateway.errors import error_result
 from gateway.policy import Policy
 from gateway.upstream import Backend
@@ -82,16 +83,41 @@ def build_app() -> FastAPI:
     async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
         arguments = arguments or {}
         request = server.request_context.request  # transport가 붙인 starlette Request
-        try:
-            agent = auth.authenticate(request.headers.get("authorization"))
-        except auth.AuthError as e:
-            audit.record(
-                audit_path, agent="anonymous", tool=name, args=arguments, decision="auth_failed"
+        parts = aggregate.split(name)
+        server_name, tool_name = parts if parts else ("unknown", name)
+        tracer = observability.tracer()
+        with tracer.start_as_current_span("tools/call") as span:
+            trace_id = observability.trace_id_hex(span)
+            duration_s = None
+            try:
+                with tracer.start_as_current_span("auth"):
+                    agent = auth.authenticate(request.headers.get("authorization"))
+            except auth.AuthError as e:
+                agent, decision = "anonymous", "auth_failed"
+                result = error_result("AUTH_FAILED", reason=e.reason)
+            else:
+                start = time.perf_counter()
+                result, decision = await routes.route_call(backends, policy, agent, name, arguments)
+                duration_s = time.perf_counter() - start
+            observability.record_call(
+                agent=agent,
+                server=server_name,
+                tool=tool_name,
+                decision=decision,
+                duration_s=duration_s,
             )
-            return error_result("AUTH_FAILED", reason=e.reason)
-        result, decision = await routes.route_call(backends, policy, agent, name, arguments)
-        audit.record(audit_path, agent=agent, tool=name, args=arguments, decision=decision)
-        return result
+            audit.record(
+                audit_path,
+                agent=agent,
+                tool=name,
+                args=arguments,
+                decision=decision,
+                trace_id=trace_id,
+            )
+            logger.info(
+                "tools/call %s agent=%s decision=%s trace_id=%s", name, agent, decision, trace_id
+            )
+            return result
 
     manager = StreamableHTTPSessionManager(app=server)
 
@@ -133,4 +159,14 @@ def build_app() -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
     app.router.routes.append(Route("/mcp", endpoint=MCPEndpoint()))
+
+    @app.get("/metrics")  # Prometheus 스크레이프 — 인증 없음 (내부 네트워크 전제)
+    def metrics() -> Response:
+        body, content_type = observability.metrics_payload()
+        return Response(body, media_type=content_type)
+
+    @app.get("/health")  # compose healthcheck용 경량 폴링
+    def health() -> dict:
+        return {"status": "ok"}
+
     return app

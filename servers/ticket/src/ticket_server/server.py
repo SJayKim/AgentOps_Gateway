@@ -1,10 +1,17 @@
 """ticket-server — 쓰기 있는 정책 테스트용 백엔드 (:8101)."""
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from ticket_server import db
 
 mcp = FastMCP("ticket-server", host="0.0.0.0", port=8101)
+
+
+@mcp.custom_route("/health", methods=["GET"])  # compose healthcheck용 (S5 P4)
+async def health(request: Request) -> PlainTextResponse:
+    return PlainTextResponse("ok")
 
 
 @mcp.tool()

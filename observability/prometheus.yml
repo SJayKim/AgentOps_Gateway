@@ -1,0 +1,8 @@
+# Gateway /metrics 스크레이프 — interval 5s (S5 P2)
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway:8000"]

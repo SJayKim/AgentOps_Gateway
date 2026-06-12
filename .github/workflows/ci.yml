@@ -13,3 +13,23 @@ jobs:
       - run: uv sync
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run pytest
+
+  # "데모가 깨지면 CI가 빨갛다" — compose 기동 후 성공-성공-거부 시나리오 (S5 P4)
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      # --wait: healthcheck healthy까지 대기 — depends_on은 준비 보장이 아니다 (eng review T4)
+      - run: docker compose up -d --build --wait
+      - run: uv run python scripts/e2e_demo.py
+        env:
+          GATEWAY_JWT_SECRET: demo-secret-do-not-use-in-prod  # compose의 데모 secret과 동일
+      - if: failure()
+        run: docker compose logs > compose-logs.txt
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose-logs.txt

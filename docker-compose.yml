@@ -1,4 +1,11 @@
-# 4서비스 — gateway(S3) + 백엔드 3종(S2). 전부 워크스페이스 루트 컨텍스트로 빌드.
+# 6서비스 — gateway(S3) + 백엔드 3종(S2) + prometheus/grafana(S5). `docker compose up` 원커맨드 기동 (Epic DoD 6).
+# healthcheck: depends_on은 기동 순서일 뿐 준비 보장이 아니다 — CI는 `up --wait`로 healthy 대기 후 E2E 실행 (eng review T4).
+x-healthcheck-defaults: &hc
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 5s
+
 services:
   gateway:
     build:
@@ -13,6 +20,9 @@ services:
       # 데모값 — 실제 운영 secret은 레포에 두지 않는다 (README 참조)
       GATEWAY_JWT_SECRET: demo-secret-do-not-use-in-prod
       GATEWAY_AUDIT_PATH: /app/audit/audit.jsonl
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
     # hard 의존 아님 — 기동 시 죽어 있는 백엔드는 지연 재집계로 처리
     depends_on:
       - ticket-server
@@ -24,15 +34,43 @@ services:
       dockerfile: servers/ticket/Dockerfile
     ports:
       - "8101:8101"
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8101/health', timeout=2)"]
   docs-server:
     build:
       context: .
       dockerfile: servers/docs/Dockerfile
     ports:
       - "8102:8102"
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8102/health', timeout=2)"]
   ops-server:
     build:
       context: .
       dockerfile: servers/ops/Dockerfile
     ports:
       - "8103:8103"
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8103/health', timeout=2)"]
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  grafana:
+    image: grafana/grafana:11.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      # 데모용 익명 접근 — production이면 인증 필수
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
