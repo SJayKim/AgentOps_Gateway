@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>AgentOps Gateway — audit admin</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+    h1 { font-size: 1.3rem; } h2 { font-size: 1rem; margin-top: 2rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: .5rem; }
+    th, td { border: 1px solid #ddd; padding: .35rem .55rem; text-align: left; }
+    th { background: #f5f5f5; }
+    tr.denied { background: #fde8e8; }
+    .muted { color: #888; }
+    form { margin-top: 1rem; }
+    form input, form select { padding: .25rem; margin-right: .5rem; }
+    code { background: #f0f0f0; padding: 0 .25rem; }
+  </style>
+</head>
+<body>
+  <h1>audit admin — 지난 24시간 민감 tool 접근 시도</h1>
+
+  <h2>거부 요약 (지난 24h) — 총 {{ total_denials }}건</h2>
+  {% if summary %}
+  <table>
+    <tr><th>agent</th><th>server</th><th>denied 횟수</th></tr>
+    {% for (agent, server), count in summary %}
+    <tr class="denied"><td>{{ agent }}</td><td>{{ server }}</td><td>{{ count }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">지난 24시간 거부 기록 없음.</p>
+  {% endif %}
+
+  <h2>감사 로그</h2>
+  <form method="get" action="/admin">
+    <input type="text" name="agent" placeholder="agent" value="{{ f_agent }}">
+    <select name="decision">
+      <option value="">모든 decision</option>
+      {% for d in ["allowed", "denied", "auth_failed", "error"] %}
+      <option value="{{ d }}"{% if f_decision == d %} selected{% endif %}>{{ d }}</option>
+      {% endfor %}
+    </select>
+    <input type="number" name="since" placeholder="지난 N시간" value="{{ f_since }}">
+    <button type="submit">필터</button>
+  </form>
+
+  {% if rows %}
+  <table>
+    <tr><th>ts</th><th>agent</th><th>tool</th><th>decision</th><th>args</th><th>trace_id</th></tr>
+    {% for r in rows %}
+    <tr{% if r.decision == "denied" %} class="denied"{% endif %}>
+      <td>{{ r.ts }}</td>
+      <td>{{ r.agent }}</td>
+      <td><code>{{ r.tool }}</code></td>
+      <td>{{ r.decision }}</td>
+      <td>{{ r.args_summary }}</td>
+      <td class="muted">{{ r.trace_id }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">아직 기록 없음.</p>
+  {% endif %}
+</body>
+</html>

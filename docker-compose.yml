@@ -20,6 +20,8 @@ services:
       # 데모값 — 실제 운영 secret은 레포에 두지 않는다 (README 참조)
       GATEWAY_JWT_SECRET: demo-secret-do-not-use-in-prod
       GATEWAY_AUDIT_PATH: /app/audit/audit.jsonl
+      # /admin 접근 토큰 (S6 Part B) — 데모값. http://localhost:8000/admin?token=... 최초 1회
+      ADMIN_TOKEN: demo-admin-token-do-not-use-in-prod
     healthcheck:
       <<: *hc
       test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]

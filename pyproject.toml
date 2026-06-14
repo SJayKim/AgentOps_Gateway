@@ -10,13 +10,16 @@ dependencies = [
 ]
 
 [tool.uv.workspace]
-members = ["gateway", "servers/*"]
+members = ["gateway", "servers/*", "demo-agent"]
 
+# demo-agent는 dev 그룹에만 — 테스트가 graph를 import하되 gateway 프로덕션
+# 이미지(uv sync --no-dev --package agentops-gateway)에는 langgraph가 섞이지 않는다.
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
+    "demo-agent",
 ]
 
 [tool.uv.sources]
@@ -24,6 +27,7 @@ agentops-gateway = { workspace = true }
 ticket-server = { workspace = true }
 docs-server = { workspace = true }
 ops-server = { workspace = true }
+demo-agent = { workspace = true }
 
 [tool.ruff]
 line-length = 100
