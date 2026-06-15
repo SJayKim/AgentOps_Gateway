@@ -7,6 +7,7 @@ import mcp.types as types
 from gateway import aggregate
 from gateway.errors import error_result
 from gateway.policy import Policy
+from gateway.ratelimit import RateLimiter
 from gateway.routes import route_call
 
 
@@ -76,6 +77,21 @@ async def test_route_call_resolves_tool_before_policy():
         "agent": "rogue-agent",
     }
     assert decision == "denied"
+
+
+async def test_route_call_rate_limited_before_resolution():
+    # 버킷 고갈 시 tool 해석·정책 이전에 RATE_LIMITED(decision=rate_limited)로 즉시 거부
+    backends = {"ticket": StubBackend("ticket", ["create_ticket"])}
+    rl = RateLimiter(capacity=1, refill_per_sec=0.0)
+    ok, decision = await route_call(
+        backends, PERMIT_ALL, "test-agent", "ticket__create_ticket", {}, rl
+    )
+    assert not ok.isError and decision == "allowed"
+    limited, decision = await route_call(
+        backends, PERMIT_ALL, "test-agent", "ticket__create_ticket", {}, rl
+    )
+    assert err_payload(limited) == {"code": "RATE_LIMITED", "agent": "test-agent"}
+    assert decision == "rate_limited"
 
 
 def test_error_result_payload_schema():

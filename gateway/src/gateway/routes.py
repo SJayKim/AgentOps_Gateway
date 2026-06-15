@@ -18,6 +18,7 @@ import mcp.types as types
 from gateway import aggregate, observability
 from gateway.errors import error_result
 from gateway.policy import Policy
+from gateway.ratelimit import RateLimiter
 from gateway.upstream import Backend
 
 
@@ -41,9 +42,18 @@ def _relay_decision(result: types.CallToolResult) -> str:
 
 
 async def route_call(
-    backends: dict[str, Backend], policy: Policy, agent: str, name: str, arguments: dict
+    backends: dict[str, Backend],
+    policy: Policy,
+    agent: str,
+    name: str,
+    arguments: dict,
+    rate_limiter: RateLimiter | None = None,
 ) -> tuple[types.CallToolResult, str]:
     """prefix 붙은 tool 이름 하나를 받아 해석·정책검사·중계까지 수행한다."""
+    # 0) rate limiting(stretch) — 활성화돼 있고 이 agent의 버킷이 비었으면 즉시 RATE_LIMITED.
+    #    tool 해석·정책 이전에 본다: 홍수 클라이언트는 어느 tool을 부르든 게이트에서 막는다.
+    if rate_limiter is not None and not rate_limiter.allow(agent):
+        return error_result("RATE_LIMITED", agent=agent), "rate_limited"
     # 1) tool 이름을 (server, tool)로 분해. prefix가 없으면 우리가 만든 이름이 아니다 → UNKNOWN_TOOL.
     parts = aggregate.split(name)
     if parts is None:

@@ -7,7 +7,7 @@
 
 [메트릭과 audit이 같은 사실을 보게 한다]
 메트릭 기록(record_call)은 audit 기록과 '같은 호출 지점'(app.py call_tool)에서, '같은
-decision enum 4종'으로 일어난다. 두 시스템이 어긋나지 않도록 어휘를 공유시킨 것이다.
+decision enum 5종'으로 일어난다. 두 시스템이 어긋나지 않도록 어휘를 공유시킨 것이다.
 
 [tracer provider를 프로세스당 1회만 설치하는 이유]
 테스트가 build_app()을 반복 호출한다. provider를 매번 새로 설치하면 OTel이 중복 설치
@@ -24,7 +24,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 TOOL_CALLS = Counter(
     "gateway_tool_calls_total",
     "tools/call count by final decision",
-    ["agent", "server", "tool", "decision"],  # decision: allowed|denied|auth_failed|error
+    [
+        "agent",
+        "server",
+        "tool",
+        "decision",
+    ],  # decision: allowed|denied|auth_failed|rate_limited|error
 )
 # [메트릭 2] 라우팅+중계 소요 시간 히스토그램. p50/p99 latency를 Grafana에서 도출하는 근거.
 # agent를 라벨에서 뺀 것은 latency가 어느 백엔드/tool이 느린지의 문제지 누가 불렀냐가

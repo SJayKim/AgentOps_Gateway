@@ -33,6 +33,7 @@ from starlette.routing import Route
 from gateway import admin, aggregate, audit, auth, observability, routes
 from gateway.errors import error_result
 from gateway.policy import Policy
+from gateway.ratelimit import RateLimiter
 from gateway.upstream import Backend
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,8 @@ def build_app() -> FastAPI:
     policy = Policy.load(os.environ.get("GATEWAY_POLICY_PATH", "policies/policy.yaml"))
     # 감사 로그 경로만 보관하고 기록 시점에 연다(append-only JSONL).
     audit_path = os.environ.get("GATEWAY_AUDIT_PATH", "audit/audit.jsonl")
+    # 클라이언트별 rate limiter — GATEWAY_RATE_LIMIT 미설정이면 None(비활성). stretch opt-in.
+    rate_limiter = RateLimiter.from_env()
 
     # MCP 저수준 Server — tools/list, tools/call 두 핸들러만 등록한다. Gateway는 자체 tool을
     # 갖지 않고 백엔드 tool을 prefix로 묶어 중계하는 게 전부다.
@@ -145,7 +148,9 @@ def build_app() -> FastAPI:
             else:
                 # 2) 인증 통과 → 정책 평가 + 백엔드 중계. latency는 여기서만 측정한다.
                 start = time.perf_counter()
-                result, decision = await routes.route_call(backends, policy, agent, name, arguments)
+                result, decision = await routes.route_call(
+                    backends, policy, agent, name, arguments, rate_limiter
+                )
                 duration_s = time.perf_counter() - start
             # 3) 관측: 메트릭 기록(decision별 카운트, 정책 거부 카운트, latency 히스토그램).
             observability.record_call(
