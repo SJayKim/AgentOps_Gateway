@@ -5,6 +5,7 @@ import json
 import mcp.types as types
 
 from gateway import aggregate
+from gateway.circuit import CircuitBreaker
 from gateway.errors import error_result
 from gateway.policy import Policy
 from gateway.ratelimit import RateLimiter
@@ -29,6 +30,13 @@ class StubBackend:
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=json.dumps({"tool": tool}))]
         )
+
+
+class DownBackend(StubBackend):
+    """call이 항상 BACKEND_UNAVAILABLE을 돌려주는 백엔드 — 죽은 백엔드 시뮬레이션."""
+
+    async def call(self, tool, arguments):
+        return error_result("BACKEND_UNAVAILABLE", server=self.name)
 
 
 def test_prefix_join_split_roundtrip():
@@ -92,6 +100,50 @@ async def test_route_call_rate_limited_before_resolution():
     )
     assert err_payload(limited) == {"code": "RATE_LIMITED", "agent": "test-agent"}
     assert decision == "rate_limited"
+
+
+async def test_circuit_opens_after_consecutive_backend_failures():
+    # 연속 BACKEND_UNAVAILABLE이 threshold에 닿으면 회로 open → 이후 호출은 백엔드를
+    # 부르지 않고 즉시 BACKEND_UNAVAILABLE(fail-fast).
+    backends = {"ticket": DownBackend("ticket", ["create_ticket"])}
+    cb = CircuitBreaker(threshold=2, cooldown_s=30.0)
+    name = "ticket__create_ticket"
+    for _ in range(2):
+        result, decision = await route_call(backends, PERMIT_ALL, "test-agent", name, {}, None, cb)
+        assert err_payload(result)["code"] == "BACKEND_UNAVAILABLE"
+        assert decision == "error"
+    assert cb.is_tripped("ticket") is True
+    # open 상태: 백엔드를 부르지 않아야 한다 — call을 폭발시키는 백엔드로 바꿔도 fast-fail.
+    backends["ticket"].call = None  # 호출되면 TypeError가 났을 것
+    result, decision = await route_call(backends, PERMIT_ALL, "test-agent", name, {}, None, cb)
+    assert err_payload(result)["code"] == "BACKEND_UNAVAILABLE"
+    assert decision == "error"
+
+
+async def test_circuit_success_keeps_closed():
+    # 정상 호출은 회로를 닫힌 채로 둔다(success 기록).
+    backends = {"ticket": StubBackend("ticket", ["create_ticket"])}
+    cb = CircuitBreaker(threshold=1, cooldown_s=30.0)
+    result, decision = await route_call(
+        backends, PERMIT_ALL, "test-agent", "ticket__create_ticket", {}, None, cb
+    )
+    assert not result.isError and decision == "allowed"
+    assert cb.is_tripped("ticket") is False
+
+
+async def test_aggregate_excludes_tripped_backend():
+    # open된 백엔드의 tool은 tools/list 집계에서 빠진다(Epic DoD 8).
+    backends = {
+        "ticket": StubBackend("ticket", ["create_ticket"]),
+        "ops": StubBackend("ops", ["query_logs"]),
+    }
+    cb = CircuitBreaker(threshold=1, cooldown_s=30.0)
+    cb.record_failure("ops")  # ops 회로 open
+    names = {t.name for t in await aggregate.aggregate_tools(backends, cb)}
+    assert names == {"ticket__create_ticket"}  # ops tool 제외
+    # breaker 없으면(None) 제외 없음 — 기존 동작
+    names = {t.name for t in await aggregate.aggregate_tools(backends)}
+    assert names == {"ticket__create_ticket", "ops__query_logs"}
 
 
 def test_error_result_payload_schema():

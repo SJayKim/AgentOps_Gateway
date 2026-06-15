@@ -31,6 +31,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from gateway import admin, aggregate, audit, auth, observability, routes
+from gateway.circuit import CircuitBreaker
 from gateway.errors import error_result
 from gateway.policy import Policy
 from gateway.ratelimit import RateLimiter
@@ -104,6 +105,8 @@ def build_app() -> FastAPI:
     audit_path = os.environ.get("GATEWAY_AUDIT_PATH", "audit/audit.jsonl")
     # 클라이언트별 rate limiter — GATEWAY_RATE_LIMIT 미설정이면 None(비활성). stretch opt-in.
     rate_limiter = RateLimiter.from_env()
+    # 백엔드별 circuit breaker — GATEWAY_CIRCUIT_THRESHOLD 미설정이면 None(비활성). stretch opt-in.
+    breaker = CircuitBreaker.from_env()
 
     # MCP 저수준 Server — tools/list, tools/call 두 핸들러만 등록한다. Gateway는 자체 tool을
     # 갖지 않고 백엔드 tool을 prefix로 묶어 중계하는 게 전부다.
@@ -113,7 +116,8 @@ def build_app() -> FastAPI:
     async def list_tools() -> list[types.Tool]:
         # 전 백엔드 tool을 prefix 붙여 집계. 정책으로 필터링하지 않는다 — 의도된 설계
         # (support-agent도 ops tool의 '존재'는 봐야 S6 거부 데모가 성립). aggregate.py 참조.
-        return await aggregate.aggregate_tools(backends)
+        # breaker가 open인 백엔드 tool은 제외(stretch) — None이면 제외 없음(기존 동작).
+        return await aggregate.aggregate_tools(backends, breaker)
 
     @server.call_tool(
         validate_input=False
@@ -149,7 +153,7 @@ def build_app() -> FastAPI:
                 # 2) 인증 통과 → 정책 평가 + 백엔드 중계. latency는 여기서만 측정한다.
                 start = time.perf_counter()
                 result, decision = await routes.route_call(
-                    backends, policy, agent, name, arguments, rate_limiter
+                    backends, policy, agent, name, arguments, rate_limiter, breaker
                 )
                 duration_s = time.perf_counter() - start
             # 3) 관측: 메트릭 기록(decision별 카운트, 정책 거부 카운트, latency 히스토그램).

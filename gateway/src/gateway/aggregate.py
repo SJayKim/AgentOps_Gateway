@@ -41,7 +41,7 @@ def prefixed(server: str, tools: list[types.Tool]) -> list[types.Tool]:
     return [tool.model_copy(update={"name": join(server, tool.name)}) for tool in tools]
 
 
-async def aggregate_tools(backends: dict) -> list[types.Tool]:
+async def aggregate_tools(backends: dict, breaker=None) -> list[types.Tool]:
     """전 백엔드의 tool 목록을 prefix 붙여 하나로 집계해 반환한다 (tools/list 응답).
 
     [핵심 설계 — 정책으로 필터링하지 않는다]
@@ -58,6 +58,8 @@ async def aggregate_tools(backends: dict) -> list[types.Tool]:
     """
     out: list[types.Tool] = []
     for backend in backends.values():
+        if breaker is not None and breaker.is_tripped(backend.name):
+            continue  # circuit open(stretch) — 죽은 백엔드 tool은 목록에서 제외(Epic DoD 8)
         if backend.tools is None:  # 아직 한 번도 집계 못 한 백엔드
             try:
                 await backend.ensure_session()  # 지금 붙어서 tool 목록 확보 시도

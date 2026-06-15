@@ -16,6 +16,7 @@ import json
 import mcp.types as types
 
 from gateway import aggregate, observability
+from gateway.circuit import CircuitBreaker
 from gateway.errors import error_result
 from gateway.policy import Policy
 from gateway.ratelimit import RateLimiter
@@ -48,6 +49,7 @@ async def route_call(
     name: str,
     arguments: dict,
     rate_limiter: RateLimiter | None = None,
+    breaker: CircuitBreaker | None = None,
 ) -> tuple[types.CallToolResult, str]:
     """prefix 붙은 tool 이름 하나를 받아 해석·정책검사·중계까지 수행한다."""
     # 0) rate limiting(stretch) — 활성화돼 있고 이 agent의 버킷이 비었으면 즉시 RATE_LIMITED.
@@ -81,7 +83,16 @@ async def route_call(
         if decision.detail is not None:
             fields["detail"] = decision.detail
         return error_result("POLICY_DENIED", **fields), "denied"
-    # 5) 허용 → 실제 백엔드로 중계. 이 span의 시간이 "순수 백엔드 호출" latency다.
+    # 5) circuit breaker(stretch) — 이 백엔드가 open이면 호출하지 않고 즉시 BACKEND_UNAVAILABLE.
+    #    죽은 백엔드에 요청을 매달지 않고 fail-fast한다(upstream의 재연결 1회 시도조차 건너뜀).
+    if breaker is not None and not breaker.allow(server):
+        return error_result("BACKEND_UNAVAILABLE", server=server), "error"
+    # 6) 허용 → 실제 백엔드로 중계. 이 span의 시간이 "순수 백엔드 호출" latency다.
     with observability.tracer().start_as_current_span("backend_call"):
         result = await backend.call(tool, arguments)
-    return result, _relay_decision(result)
+    relay = _relay_decision(result)
+    if breaker is not None:
+        # BACKEND_UNAVAILABLE(=relay "error")만 인프라 실패로 친다 — tool 자체 오류는 백엔드가
+        # 살아있다는 뜻이라 success로 기록해 회로를 닫는다(half-open probe면 close로 회복).
+        breaker.record_failure(server) if relay == "error" else breaker.record_success(server)
+    return result, relay
