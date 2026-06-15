@@ -76,9 +76,9 @@ generic 오류로 뭉개지 못하게 구조로 차단.
 
 ### 수동 검증 체크리스트 (AC1·2·6 — CI 제외)
 
-- [ ] 시나리오 4단계 완주, 3단계 출력에 `POLICY_DENIED`의 `rule` 값 포함 (AC1)
-- [ ] 우회 계획이 `rule`을 참조하고 대안(docs 검색)을 실제 수행·보고 (AC2)
-- [ ] 실행 후 `/admin`에 해당 거부 시도가 나타남 — end-to-end 연결 (AC6)
+- [x] 시나리오 4단계 완주, 3단계 출력에 `POLICY_DENIED`의 `rule` 값 포함 (AC1)
+- [x] 우회 계획이 `rule`을 참조하고 대안(docs 검색)을 실제 수행·보고 (AC2)
+- [x] 실행 후 `/admin`에 해당 거부 시도가 나타남 — end-to-end 연결 (AC6)
 
 거부 분기 라우팅·payload 파싱은 LLM 없이 `tests/unit/test_demo_agent.py`로 검증된다 (AC3).
 
