@@ -7,9 +7,10 @@ append-only 파일이면 그 자체로 "변조 안 됨"의 약한 보증이 되�
 append만 하면 돼서 구현이 단순하다. admin 페이지(S6)도 이 파일을 직접 읽는다.
 
 [decision enum을 메트릭과 공유하는 이유]
-decision은 allowed | denied | auth_failed | error 4종 — observability.py 메트릭의
-라벨과 정확히 동일하다 (eng review 이슈 2). 감사 로그와 메트릭이 같은 어휘로 같은 사실을
-기록해야, 대시보드의 "거부 12건"과 audit의 "denied 12줄"이 어긋나지 않는다.
+decision은 allowed | denied | auth_failed | rate_limited | error 5종 — observability.py
+메트릭의 라벨과 정확히 동일하다 (eng review 이슈 2). 감사 로그와 메트릭이 같은 어휘로 같은
+사실을 기록해야, 대시보드의 "거부 12건"과 audit의 "denied 12줄"이 어긋나지 않는다.
+(rate_limited는 S5 stretch rate limiting이 더한 값 — ratelimit.py 참조.)
 
 [기록 실패 시 호출을 막지 않는 이유]
 디스크 오류로 audit 쓰기가 실패해도 tool 호출 자체는 진행시킨다(에러 로그만 남김).

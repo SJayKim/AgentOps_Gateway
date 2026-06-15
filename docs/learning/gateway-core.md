@@ -19,8 +19,10 @@
    │  └──────────────┬─────────────────────────┘    │
    │   call_tool 단일 경로:                          │
    │     1) auth   →  2) routes.route_call           │
+   │                     ├─ rate limit (stretch·0)   │
    │                     ├─ aggregate.split (prefix) │
    │                     ├─ policy.evaluate          │
+   │                     ├─ circuit breaker(stretch·5)│
    │                     └─ Backend.call (중계)       │
    │     3) observability  4) audit                  │
    └───────┬─────────────┬─────────────┬────────────┘
@@ -287,6 +289,8 @@ def _relay_decision(result: types.CallToolResult) -> str:
 
 (메타포: `route_call`은 **경비 데스크의 체크리스트**다. "이 부서가 실존하나 → 이 직원이 실존하나 → 이 사람에게 출입 권한이 있나" 순서로 묻는다. 직원 이름 오타를 "권한 없음"으로 처리하면 안 되듯, 없는 tool은 거부가 아니라 "그런 tool 없음"으로 돌려준다.)
 
+> 참고: 위 코드 블록은 코어 흐름(tool 해석 → 정책 → 중계)에 집중한 모습이다. 실제 `route_call`에는 이 앞뒤로 **stretch 두 단계**가 더 끼어 있다 — 맨 앞의 rate limit(단계 0)과 정책 통과 후의 circuit breaker(단계 5). 둘 다 꺼져 있으면 경로에서 사라지므로 코어 설명에선 생략했다. 상세는 [resilience.md](resilience.md).
+
 ---
 
 ## 5. `app.py` — 단일 진입점 조립
@@ -449,13 +453,13 @@ uvicorn.run(build_app(), host="0.0.0.0", port=8000)
 
 1. **`__main__.py`** → `build_app()`을 띄워 `:8000`에서 대기.
 2. **`app.py` `MCPEndpoint`** → 바깥 인증. 실패해도 `tools/call`이면(`_is_tools_call`) `_buffer_body`로 body를 재생 가능하게 만들어 안쪽으로 통과시킨다.
-3. **`app.py` `call_tool`** → `auth.authenticate`로 재인증 → 통과 시 `routes.route_call(backends, policy, agent, name, arguments)` 호출.
-4. **`routes.py`** → `aggregate.split(name)`으로 prefix 분해 → 백엔드/tool 실존 확인 → `policy.evaluate` → 허용이면 `backend.call(tool, arguments)`.
+3. **`app.py` `call_tool`** → `auth.authenticate`로 재인증 → 통과 시 `routes.route_call(backends, policy, agent, name, arguments, rate_limiter, breaker)` 호출. (`rate_limiter`·`breaker`는 stretch가 꺼져 있으면 `None`.)
+4. **`routes.py`** → **(stretch) rate limit** 체크(`rate_limiter.allow(agent)`, tool 해석 전) → `aggregate.split(name)`으로 prefix 분해 → 백엔드/tool 실존 확인 → `policy.evaluate` → 허용이면 **(stretch) circuit breaker** 체크(`breaker.allow(server)`, 백엔드 호출 직전) → `backend.call(tool, arguments)` → 결과를 회로에 보고(`record_success`/`record_failure`). 두 stretch 단계의 상세는 [resilience.md](resilience.md).
 5. **`upstream.py` `Backend.call`** → `ensure_session`이 준 공유 세션으로 `_race_call`. 실패하면 1회 재연결.
 6. 거부·오류가 나는 모든 지점(`app.py`의 AUTH_FAILED, `routes.py`의 UNKNOWN_TOOL/POLICY_DENIED, `upstream.py`의 BACKEND_UNAVAILABLE)은 **전부 `errors.error_result`** 한 함수를 호출 → 동일 봉투 보장.
 7. **`app.py`** → 결과의 `decision`을 `observability.record_call`(메트릭)과 `audit.record`(JSONL)에 **같은 값으로** 기록하고 `trace_id`를 박는다.
 
-`tools/list`는 더 짧다: `app.py list_tools` → `aggregate.aggregate_tools(backends)` → 각 `Backend.tools` 캐시(또는 지연 재집계) → prefix 붙여 7개 반환(정책 필터 없음).
+`tools/list`는 더 짧다: `app.py list_tools` → `aggregate.aggregate_tools(backends, breaker)` → 각 `Backend.tools` 캐시(또는 지연 재집계) → prefix 붙여 7개 반환(정책 필터 없음). 단 **(stretch)** `breaker`가 켜져 있고 어떤 백엔드의 회로가 내려가 있으면(`is_tripped`) 그 백엔드 tool은 목록에서 제외된다 — 상세는 [resilience.md](resilience.md).
 
 외부 결합점은 셋이다: **클라이언트**(에이전트가 `:8000/mcp`로 진입), **백엔드 3종**(`upstream.py`가 env URL로 연결), **관측 스택**(`/metrics`를 Prometheus가 스크레이프, audit JSONL을 admin이 읽음).
 

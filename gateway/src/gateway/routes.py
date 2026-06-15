@@ -7,8 +7,9 @@ tool 이름이 "정책에 없으니 거부"(POLICY_DENIED)로 잘못 분류돼 �
 오해한다. 그래서 "이 tool이 실제로 있나?"를 먼저 확인하고, 있는 tool에 대해서만 정책을 묻는다.
 
 [반환 계약]
-(CallToolResult, audit decision) 튜플. decision은 allowed | denied | error 중 하나로,
-app.py가 메트릭·audit에 그대로 기록한다.
+(CallToolResult, audit decision) 튜플. decision은 allowed | denied | rate_limited | error 중
+하나로, app.py가 메트릭·audit에 그대로 기록한다. (인증 실패 auth_failed는 이 함수에 오기 전
+app.py가 처리하므로 여기선 나오지 않는다.)
 """
 
 import json
@@ -52,8 +53,10 @@ async def route_call(
     breaker: CircuitBreaker | None = None,
 ) -> tuple[types.CallToolResult, str]:
     """prefix 붙은 tool 이름 하나를 받아 해석·정책검사·중계까지 수행한다."""
-    # 0) rate limiting(stretch) — 활성화돼 있고 이 agent의 버킷이 비었으면 즉시 RATE_LIMITED.
-    #    tool 해석·정책 이전에 본다: 홍수 클라이언트는 어느 tool을 부르든 게이트에서 막는다.
+    # 0) rate limiting(stretch) — 켜져 있고 이 agent의 토큰 통이 비었으면 곧장 RATE_LIMITED로 거부.
+    #    왜 맨 앞이냐면: tool 이름을 풀거나 정책을 따지는 일조차 하기 전에 막아야, 호출을 쏟아붓는
+    #    클라이언트가 어느 tool을 두드리든 게이트 입구에서 차단돼 뒷단 작업을 낭비시키지 않기 때문.
+    #    (rate_limiter가 None=미설정이면 이 줄을 건너뛰어 기존 동작 그대로다.)
     if rate_limiter is not None and not rate_limiter.allow(agent):
         return error_result("RATE_LIMITED", agent=agent), "rate_limited"
     # 1) tool 이름을 (server, tool)로 분해. prefix가 없으면 우리가 만든 이름이 아니다 → UNKNOWN_TOOL.
@@ -83,8 +86,10 @@ async def route_call(
         if decision.detail is not None:
             fields["detail"] = decision.detail
         return error_result("POLICY_DENIED", **fields), "denied"
-    # 5) circuit breaker(stretch) — 이 백엔드가 open이면 호출하지 않고 즉시 BACKEND_UNAVAILABLE.
-    #    죽은 백엔드에 요청을 매달지 않고 fail-fast한다(upstream의 재연결 1회 시도조차 건너뜀).
+    # 5) circuit breaker(stretch) — 여기까진 정책까지 통과한 '보낼 자격이 있는' 호출만 온다.
+    #    그런데 이 백엔드의 회로가 내려가 있으면(open=계속 말썽이라 차단 중) 호출조차 안 하고
+    #    즉시 BACKEND_UNAVAILABLE로 돌려준다. 죽은 백엔드에 요청을 매달아 두지 않고 곧바로
+    #    실패시키는 것(fail-fast) — upstream의 '재연결 1회 시도'마저 건너뛰어 응답을 빠르게 한다.
     if breaker is not None and not breaker.allow(server):
         return error_result("BACKEND_UNAVAILABLE", server=server), "error"
     # 6) 허용 → 실제 백엔드로 중계. 이 span의 시간이 "순수 백엔드 호출" latency다.
@@ -92,7 +97,9 @@ async def route_call(
         result = await backend.call(tool, arguments)
     relay = _relay_decision(result)
     if breaker is not None:
-        # BACKEND_UNAVAILABLE(=relay "error")만 인프라 실패로 친다 — tool 자체 오류는 백엔드가
-        # 살아있다는 뜻이라 success로 기록해 회로를 닫는다(half-open probe면 close로 회복).
+        # 회로에 이번 호출 결과를 보고한다 — '백엔드가 살아 있었나'만 본다.
+        # BACKEND_UNAVAILABLE(=relay "error")만 진짜 인프라 실패로 쳐서 실패 카운트를 올린다.
+        # tool 자체 오류(없는 ticket_id 등)는 백엔드가 멀쩡히 응답했다는 뜻이라 success로 기록해
+        # 회로를 닫아 둔다(half-open 시험 호출이 성공한 경우라면 정상으로 복구).
         breaker.record_failure(server) if relay == "error" else breaker.record_success(server)
     return result, relay

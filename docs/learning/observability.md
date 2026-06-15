@@ -59,12 +59,12 @@
 TOOL_CALLS = Counter(
     "gateway_tool_calls_total",
     "tools/call count by final decision",
-    ["agent", "server", "tool", "decision"],  # decision: allowed|denied|auth_failed|error
+    ["agent", "server", "tool", "decision"],  # decision: allowed|denied|auth_failed|rate_limited|error
 )
 ```
 
 **무엇.** 모든 `tools/call`을 **최종 decision별로** 세는 Counter(누적 증가만 하는 수치). 라벨은 `agent×server×tool×decision` 4개.
-**왜 tool까지 라벨에 두는가.** Prometheus에서 라벨 조합 수(카디널리티)가 폭발하면 메모리·성능이 무너진다. 보통 `tool`처럼 값이 많아질 수 있는 라벨은 피한다. 하지만 주석이 밝히듯 데모 규모는 `3×3×~3×4`로 작아서(약 100여 조합) 폭발하지 않는다 — 그래서 안심하고 tool까지 라벨에 둘 수 있다. 작은 시스템이라 누릴 수 있는 호사다.
+**왜 tool까지 라벨에 두는가.** Prometheus에서 라벨 조합 수(카디널리티)가 폭발하면 메모리·성능이 무너진다. 보통 `tool`처럼 값이 많아질 수 있는 라벨은 피한다. 하지만 주석이 밝히듯 데모 규모는 `3×3×~3×5`로 작아서(약 100여 조합) 폭발하지 않는다 — 그래서 안심하고 tool까지 라벨에 둘 수 있다. 작은 시스템이라 누릴 수 있는 호사다. (decision은 stretch에서 `rate_limited`가 더해져 5종이 됐다.)
 
 ```python
 CALL_DURATION = Histogram(
@@ -247,7 +247,7 @@ Histogram의 `_bucket` 시계열에 `histogram_quantile`을 씌워 **중앙값(p
 - **OTel span 4단계** — 한 요청의 생애를 `요청 수신 → 인증 → 정책 평가 → 백엔드 호출` 네 단계 span으로 감싼다(스펙). `tracer()`가 만든 tracer로 이 span들을 연다.
 - **trace_id 전파** — `trace_id_hex(span)`로 뽑은 32 hex가 백엔드 호출·**audit JSONL**까지 전파된다. audit의 `trace_id` 필드가 이 OTel trace ID로 채워진다(스펙: "audit의 trace_id를 OTel trace ID로 교체").
 - **decision 단일 지점** — `record_call(...)`가 `app.py`에서 `audit.record(...)`와 **나란히** 불린다(`record_call` docstring). 즉 **decision이 확정되는 한 지점**에서 메트릭과 audit이 같이 기록된다.
-- **decision enum 일치** — 메트릭의 `decision`은 `allowed | denied | auth_failed | error` 4종으로, audit이 기록하는 decision 어휘와 동일하다(모듈 docstring: "같은 decision enum 4종"). 그래서 **대시보드의 거부 카운트와 audit 로그의 거부 줄 수가 정확히 일치**한다 — 계기판과 기록부가 서로를 검증한다.
+- **decision enum 일치** — 메트릭의 `decision`은 `allowed | denied | auth_failed | rate_limited | error` 5종으로, audit이 기록하는 decision 어휘와 동일하다(모듈 docstring: "같은 decision enum 5종"). 그래서 **대시보드의 거부 카운트와 audit 로그의 거부 줄 수가 정확히 일치**한다 — 계기판과 기록부가 서로를 검증한다. (stretch의 rate limiting이 `rate_limited` 값을 더했다 — **기존 `TOOL_CALLS` 카운터의 라벨 값 하나가 늘었을 뿐, 새 Prometheus 메트릭이나 Grafana 패널은 만들지 않는다.** 상세는 [resilience.md](resilience.md).)
 
 요컨대: 한 번의 `tools/call` → span 4단계로 추적 + `record_call`로 메트릭 3종 갱신 + `audit.record`로 같은 trace_id·같은 decision 기록. 세 시스템이 **한 사건의 세 얼굴**을 본다.
 
@@ -256,7 +256,7 @@ Histogram의 `_bucket` 시계열에 `histogram_quantile`을 씌워 **중앙값(p
 ## 5. 관통하는 설계 원칙 요약
 
 - **코드화된 provisioning (수동 클릭 금지)**: datasource·dashboard·스크레이프가 전부 YAML/JSON으로 박혀 있어 `docker compose up`만으로 동일한 대시보드가 재현된다. UI 클릭 설정은 사라지면 끝이지만, 코드는 git에 남는다.
-- **메트릭·audit이 같은 사실을 보게**: 둘이 `app.py`의 같은 호출 지점에서 같은 `decision` 4종 어휘로 기록되어, 계기판 숫자와 기록부 줄 수가 절대 어긋나지 않는다.
+- **메트릭·audit이 같은 사실을 보게**: 둘이 `app.py`의 같은 호출 지점에서 같은 `decision` 5종 어휘로 기록되어, 계기판 숫자와 기록부 줄 수가 절대 어긋나지 않는다.
 - **정책 거부 카운트 우선 (절대 미삭제)**: `gateway_policy_denied_total`은 `TOOL_CALLS`로 대체 가능함에도 1급 메트릭으로 독립시켜, 게이트웨이의 핵심 가치(권한 매트릭스 강제)를 대시보드 첫 패널에 박았다.
 - **trace ID 한 개로 세 시스템을 꿰기**: 32 hex OTel trace ID를 메트릭·trace·audit이 공유해, 한 요청을 처음부터 끝까지 되짚을 수 있다.
 - **카디널리티를 의식한 라벨 선택**: tool 라벨은 데모 규모라 허용하고, latency에선 의미상·성능상 불필요한 agent를 뺐다 — 라벨은 "공짜"가 아니라는 자각.

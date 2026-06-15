@@ -1,5 +1,10 @@
 """백엔드별 회로 차단기(circuit breaker) — S5 stretch(P5) 2순위.
 
+[한 줄로 뭘 하나 — 비유]
+집의 두꺼비집(누전차단기)과 똑같다. 어떤 백엔드가 계속 말썽이면 그쪽으로 가는 스위치를
+잠깐 '탁' 내려 둔다. 그동안은 호출을 아예 안 보내고 즉시 실패로 돌려준다. 일정 시간이 지나면
+스위치를 딱 한 번만 살짝 올려 시험해 보고 — 멀쩡하면 정상 복귀, 아직도 말썽이면 도로 내린다.
+
 [왜 회로 차단기인가]
 design.md "우선순위 순서"에서 rate limiting 다음 stretch로 못 박았다. 한 백엔드가 죽으면
 그쪽 tool 호출은 매번 재연결 1회 시도(upstream.call) 후에야 BACKEND_UNAVAILABLE을 돌려준다
@@ -7,10 +12,13 @@ design.md "우선순위 순서"에서 rate limiting 다음 stretch로 못 박았
 연속 실패가 threshold에 닿으면 open으로 전환해 그 백엔드 호출을 '시도조차 않고' 즉시
 실패시키고(fail-fast), tools/list에서도 빼서 에이전트가 죽은 tool을 보지 못하게 한다.
 
-[상태 모델]
-  - closed   : 정상. 호출 통과. 실패가 threshold에 닿으면 open.
-  - open      : 차단. cooldown_s 동안 호출을 안 보내고 즉시 거부. tools/list 제외.
-  - half-open : cooldown 경과 후 probe 1회만 허용. 성공 → close, 실패 → 다시 open(타이머 리셋).
+[상태 모델 — 두꺼비집 스위치의 세 가지 위치]
+  - closed   (스위치 올라감 / 정상)   : 호출을 그대로 통과시킨다. 연속 실패가 threshold(정해 둔
+                                        기준 횟수)에 닿으면 open으로 넘어간다.
+  - open      (스위치 내림 / 차단)     : cooldown_s(식히는 시간) 동안 아예 호출을 안 보내고 즉시
+                                        거부한다. tools/list 목록에서도 이 백엔드 tool을 숨긴다.
+  - half-open (살짝 올려 떠보기)        : cooldown이 지나면 딱 1번만 시험 호출(probe)을 허용한다.
+                                        성공하면 closed로 복구, 실패하면 도로 open(타이머 리셋).
 
 [기본 비활성 — opt-in stretch]
 ratelimit.py와 같은 이유로 GATEWAY_CIRCUIT_THRESHOLD 미설정이면 from_env()가 None을 돌려

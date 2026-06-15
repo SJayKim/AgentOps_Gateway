@@ -103,9 +103,11 @@ def build_app() -> FastAPI:
     policy = Policy.load(os.environ.get("GATEWAY_POLICY_PATH", "policies/policy.yaml"))
     # 감사 로그 경로만 보관하고 기록 시점에 연다(append-only JSONL).
     audit_path = os.environ.get("GATEWAY_AUDIT_PATH", "audit/audit.jsonl")
-    # 클라이언트별 rate limiter — GATEWAY_RATE_LIMIT 미설정이면 None(비활성). stretch opt-in.
+    # 클라이언트별 rate limiter — env(GATEWAY_RATE_LIMIT)를 안 주면 None을 받아 '꺼진' 채로 둔다.
+    # None이면 아래 route_call이 레이트리밋 단계를 통째로 건너뛰므로 기존 동작 그대로다(opt-in stretch).
     rate_limiter = RateLimiter.from_env()
-    # 백엔드별 circuit breaker — GATEWAY_CIRCUIT_THRESHOLD 미설정이면 None(비활성). stretch opt-in.
+    # 백엔드별 circuit breaker — 마찬가지로 env(GATEWAY_CIRCUIT_THRESHOLD)가 없으면 None=비활성.
+    # 안 켜면 tools/list 집계도 호출 차단도 평소대로 — 새 기능이 기존 경로를 전혀 건드리지 않는다.
     breaker = CircuitBreaker.from_env()
 
     # MCP 저수준 Server — tools/list, tools/call 두 핸들러만 등록한다. Gateway는 자체 tool을
@@ -152,6 +154,8 @@ def build_app() -> FastAPI:
             else:
                 # 2) 인증 통과 → 정책 평가 + 백엔드 중계. latency는 여기서만 측정한다.
                 start = time.perf_counter()
+                # rate_limiter·breaker는 둘 다 None일 수 있다(stretch 미설정). None이면 route_call
+                # 안에서 해당 단계만 조용히 건너뛰므로, 여기선 항상 그대로 넘겨주기만 하면 된다.
                 result, decision = await routes.route_call(
                     backends, policy, agent, name, arguments, rate_limiter, breaker
                 )

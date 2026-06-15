@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProces
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
 # [메트릭 1] 모든 tools/call을 최종 decision별로 센다. 라벨 카디널리티(agent×server×tool×
-# decision)가 데모 규모(3×3×~3×4)라 폭발하지 않는다 — 그래서 tool까지 라벨에 둘 수 있다.
+# decision)가 데모 규모(3×3×~3×5)라 폭발하지 않는다 — 그래서 tool까지 라벨에 둘 수 있다.
 TOOL_CALLS = Counter(
     "gateway_tool_calls_total",
     "tools/call count by final decision",
@@ -29,7 +29,9 @@ TOOL_CALLS = Counter(
         "server",
         "tool",
         "decision",
-    ],  # decision: allowed|denied|auth_failed|rate_limited|error
+    ],  # decision 5종(=호출의 최종 판정): allowed(통과) | denied(정책이 막음) |
+    #   auth_failed(인증 실패) | rate_limited(너무 자주 불러서 막힘) |
+    #   error(없는 tool·잘못된 호출·백엔드 장애)
 )
 # [메트릭 2] 라우팅+중계 소요 시간 히스토그램. p50/p99 latency를 Grafana에서 도출하는 근거.
 # agent를 라벨에서 뺀 것은 latency가 어느 백엔드/tool이 느린지의 문제지 누가 불렀냐가

@@ -1,5 +1,11 @@
 """클라이언트별 rate limiting — S5 stretch(P5) 1순위.
 
+[한 줄로 뭘 하나 — 비유]
+놀이공원 자유이용권 같은 '토큰'을 클라이언트(에이전트)마다 한 통씩 쥐여 준다. 도구를 한 번
+부를 때마다 토큰 한 장을 쓰고, 통이 비면 그 클라이언트는 잠시 거부당한다. 그리고 시간이
+지나면 초당 정해진 장수만큼 통을 다시 채워 준다. 즉, '단위 시간당 호출 횟수'를 부드럽게
+제한하는 카운터다.
+
 [왜 토큰 버킷인가]
 design.md "우선순위 순서"에서 rate limiting은 "클라이언트별 token bucket"으로 못 박았다.
 토큰 버킷은 평균 속도(refill)를 강제하면서도 짧은 버스트(capacity)를 허용한다 — 에이전트가
@@ -42,6 +48,9 @@ class RateLimiter:
         """토큰 1개를 소비한다. 잔량이 부족하면 False(=거부)."""
         now = self._now()
         tokens, last = self._buckets.get(agent, (self.capacity, now))
+        # 지난번 본 뒤 흐른 시간(now - last)만큼 토큰을 다시 채운다(흐른 초 × 초당 회복량).
+        # min(capacity, …)은 '통은 넘치지 않는다'는 뜻 — 오래 안 썼다고 토큰이 무한정 쌓이지
+        # 않고, 가득 차면(capacity) 거기서 멈춘다. 그래야 한참 쉰 클라이언트가 갑자기 폭주하지 못한다.
         tokens = min(self.capacity, tokens + (now - last) * self.refill_per_sec)
         if tokens < 1:
             self._buckets[agent] = (tokens, now)  # 시각만 갱신(다음 회복 계산 기준)

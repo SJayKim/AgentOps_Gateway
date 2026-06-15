@@ -12,18 +12,19 @@
 ## 권장 읽기 순서 (실행 흐름 순)
 
 요청이 시스템을 통과하는 실제 순서대로 읽으면 가장 자연스럽습니다:
-**백엔드 → Gateway 코어 → 인증 → 정책 → 감사 → 관측 → admin → demo 에이전트.**
+**백엔드 → Gateway 코어 → 장애·과부하 방어 → 인증 → 정책 → 감사 → 관측 → admin → demo 에이전트.**
 
 | # | 문서 | 한 줄 설명 | 스펙 |
 |---|------|-----------|------|
 | 1 | [backend-servers.md](backend-servers.md) | 라우팅 대상이자 권한 매트릭스의 "열"이 되는 백엔드 MCP 서버 3종(ticket·docs·ops) — 직접 구현한 시뮬레이션 환경 | S2 |
 | 2 | [gateway-core.md](gateway-core.md) | 모든 에이전트가 연결하는 단일 진입점 — tools/list 집계(prefix 네임스페이싱), 라우팅, 백엔드 세션 유지 | S3 |
-| 3 | [auth.md](auth.md) | JWT 인증 — 정적 사전발급 토큰과 검문소. "누가 요청했는가"를 확정하는 첫 관문 | S4 |
-| 4 | [policy.md](policy.md) | YAML 정책 엔진 — default-deny로 권한 매트릭스를 tool call 단위로 강제. 프로젝트의 존재 이유 | S4 |
-| 5 | [audit.md](audit.md) | append-only JSONL 감사 로그 — 허용/거부/인증실패/오류 모든 호출의 기록. 거버넌스 증거 계층 | S4 |
-| 6 | [observability.md](observability.md) | OTel trace ID + Prometheus 메트릭 + Grafana 대시보드 — "거부가 몇 번 일어났나"를 계기판으로 | S5 |
-| 7 | [admin.md](admin.md) | `/admin` 감사 열람 페이지 — "지난 24시간, 누가 민감 tool에 접근 시도했나"에 답하는 화면 | S6 |
-| 8 | [demo-agent.md](demo-agent.md) | LangGraph support-agent — 실제 LLM이 정책 거부를 받고 **우회 계획**을 세우는 데모 (유일한 실 LLM 사용 지점) | S6 |
+| 3 | [resilience.md](resilience.md) | 장애·과부하 방어 — 쏟아지는 호출을 막는 rate limit(토큰 버킷)과 죽은 백엔드를 끊는 circuit breaker. routes.py에 끼운 opt-in 방어막 | S5 stretch / P5 |
+| 4 | [auth.md](auth.md) | JWT 인증 — 정적 사전발급 토큰과 검문소. "누가 요청했는가"를 확정하는 첫 관문 | S4 |
+| 5 | [policy.md](policy.md) | YAML 정책 엔진 — default-deny로 권한 매트릭스를 tool call 단위로 강제. 프로젝트의 존재 이유 | S4 |
+| 6 | [audit.md](audit.md) | append-only JSONL 감사 로그 — 허용/거부/인증실패/레이트리밋/오류 모든 호출의 기록. 거버넌스 증거 계층 | S4 |
+| 7 | [observability.md](observability.md) | OTel trace ID + Prometheus 메트릭 + Grafana 대시보드 — "거부가 몇 번 일어났나"를 계기판으로 | S5 |
+| 8 | [admin.md](admin.md) | `/admin` 감사 열람 페이지 — "지난 24시간, 누가 민감 tool에 접근 시도했나"에 답하는 화면 | S6 |
+| 9 | [demo-agent.md](demo-agent.md) | LangGraph support-agent — 실제 LLM이 정책 거부를 받고 **우회 계획**을 세우는 데모 (유일한 실 LLM 사용 지점) | S6 |
 
 ## 각 문서의 공통 골격
 

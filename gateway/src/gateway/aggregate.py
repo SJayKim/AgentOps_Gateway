@@ -55,11 +55,17 @@ async def aggregate_tools(backends: dict, breaker=None) -> list[types.Tool]:
     기동 때 죽어 있던 백엔드(tools is None)는 이 시점에 다시 붙기를 시도하고, 그래도
     실패하면 조용히 건너뛴다 — 살아있는 백엔드의 tool은 정상 노출하고, 죽은 백엔드는
     다음 tools/list 때 또 시도한다(부분 가용성).
+
+    [회로 차단 제외 — stretch]
+    breaker가 주어지고 어떤 백엔드의 회로가 내려가 있으면(open), 그 백엔드 tool은 목록에서
+    뺀다. breaker가 None(미설정)이면 제외 없이 기존처럼 전부 집계한다.
     """
     out: list[types.Tool] = []
     for backend in backends.values():
         if breaker is not None and breaker.is_tripped(backend.name):
-            continue  # circuit open(stretch) — 죽은 백엔드 tool은 목록에서 제외(Epic DoD 8)
+            # 회로가 내려간(open) 백엔드 = 지금 말썽이라 차단 중인 백엔드. 그 도구는 목록에서 숨겨
+            # 에이전트가 어차피 안 되는 죽은 tool을 보지도, 부르지도 않게 한다(stretch, Epic DoD 8).
+            continue
         if backend.tools is None:  # 아직 한 번도 집계 못 한 백엔드
             try:
                 await backend.ensure_session()  # 지금 붙어서 tool 목록 확보 시도

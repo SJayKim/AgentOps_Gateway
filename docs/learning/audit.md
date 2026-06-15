@@ -54,7 +54,7 @@ Gateway를 출입 통제가 있는 건물이라고 생각해 보자. 에이전�
 | `agent` | `"docs-bot"` 또는 `"anonymous"` | 호출한 에이전트 ID | "누가" 시도했나 |
 | `tool` | `"ops__query_logs"` | prefix 포함 전체 도구 이름 | "무엇에" 접근했나. admin이 prefix(`ops__`)로 서버를 도로 추출 |
 | `args_summary` | `'{"q":"error"}'` (최대 256자) | 인자 전체 JSON을 256자에서 절단 | "어떻게" 호출했나. 로그 비대화·민감정보 과다기록 방지 |
-| `decision` | `"allowed"` / `"denied"` / `"auth_failed"` / `"error"` | 4종 판정 enum | 통제의 결과. 메트릭과 어휘 공유 |
+| `decision` | `"allowed"` / `"denied"` / `"auth_failed"` / `"rate_limited"` / `"error"` | 5종 판정 enum | 통제의 결과. 메트릭과 어휘 공유 |
 | `trace_id` | `"a1b2...32hex"` | OTel trace ID (32 hex) | 게이트웨이 로그·span과 같은 값 → 교차 추적 |
 
 ---
@@ -75,9 +75,10 @@ append-only 파일이면 그 자체로 "변조 안 됨"의 약한 보증이 되�
 append만 하면 돼서 구현이 단순하다. admin 페이지(S6)도 이 파일을 직접 읽는다.
 
 [decision enum을 메트릭과 공유하는 이유]
-decision은 allowed | denied | auth_failed | error 4종 — observability.py 메트릭의
-라벨과 정확히 동일하다 (eng review 이슈 2). 감사 로그와 메트릭이 같은 어휘로 같은 사실을
-기록해야, 대시보드의 "거부 12건"과 audit의 "denied 12줄"이 어긋나지 않는다.
+decision은 allowed | denied | auth_failed | rate_limited | error 5종 — observability.py
+메트릭의 라벨과 정확히 동일하다 (eng review 이슈 2). 감사 로그와 메트릭이 같은 어휘로 같은
+사실을 기록해야, 대시보드의 "거부 12건"과 audit의 "denied 12줄"이 어긋나지 않는다.
+(rate_limited는 S5 stretch rate limiting이 더한 값 — ratelimit.py 참조.)
 
 [기록 실패 시 호출을 막지 않는 이유]
 디스크 오류로 audit 쓰기가 실패해도 tool 호출 자체는 진행시킨다(에러 로그만 남김).
@@ -174,9 +175,9 @@ def record(path: str, *, agent: str, tool: str, args: dict, decision: str, trace
 
 `audit.py`는 50줄짜리 작은 모듈이지만, Gateway 거버넌스의 **세 시스템을 잇는 허브**다. (아래 연결 지점은 스펙·design 근거에 따른 설명이며, 호출부 코드 자체는 이 문서의 담당 파일이 아니다.)
 
-1. **라우팅/정책 경로에서 호출됨 (입력 측)** — Gateway가 `tools/call`을 처리하는 경로의 끝에서, 인증·정책·백엔드 호출이 끝나 `decision`이 4종 중 하나로 확정된 순간 `record(...)`가 불린다. `allowed`(정책 통과), `denied`(YAML 정책 거부), `auth_failed`(JWT 인증 실패), `error`(UNKNOWN_TOOL·BACKEND_UNAVAILABLE 등 정책 외 실패) — 네 경로 전부가 빠짐없이 한 줄을 남긴다. 즉 감사 로그는 "허용된 호출의 로그"가 아니라 **시도된 모든 호출의 로그**다.
+1. **라우팅/정책 경로에서 호출됨 (입력 측)** — Gateway가 `tools/call`을 처리하는 경로의 끝에서, 인증·정책·백엔드 호출이 끝나 `decision`이 5종 중 하나로 확정된 순간 `record(...)`가 불린다. `allowed`(정책 통과), `denied`(YAML 정책 거부), `auth_failed`(JWT 인증 실패), `rate_limited`(stretch — 호출 과다로 차단), `error`(UNKNOWN_TOOL·BACKEND_UNAVAILABLE 등 정책 외 실패) — 다섯 경로 전부가 빠짐없이 한 줄을 남긴다. 즉 감사 로그는 "허용된 호출의 로그"가 아니라 **시도된 모든 호출의 로그**다.
 
-2. **S5 메트릭과 어휘를 공유함 (가로 측)** — `decision`의 4종 enum은 `observability.py` 메트릭 라벨과 **정확히 동일**하게 설계됐다(eng review 이슈 2). 두 시스템이 같은 단어로 같은 사실을 기록하기 때문에, 대시보드의 "denied 12건"과 audit의 "denied 12줄"이 결코 어긋나지 않는다. 감사와 관측이 **단일 진실(single source of vocabulary)**을 공유하는 셈이며, `trace_id`가 OTel ID로 공유되는 것도 같은 맥락 — 한 줄에서 메트릭·로그·트레이스로 자유롭게 건너갈 수 있다.
+2. **S5 메트릭과 어휘를 공유함 (가로 측)** — `decision`의 5종 enum은 `observability.py` 메트릭 라벨과 **정확히 동일**하게 설계됐다(eng review 이슈 2). 두 시스템이 같은 단어로 같은 사실을 기록하기 때문에, 대시보드의 "denied 12건"과 audit의 "denied 12줄"이 결코 어긋나지 않는다. 감사와 관측이 **단일 진실(single source of vocabulary)**을 공유하는 셈이며, `trace_id`가 OTel ID로 공유되는 것도 같은 맥락 — 한 줄에서 메트릭·로그·트레이스로 자유롭게 건너갈 수 있다.
 
 3. **S6 admin 페이지가 직접 읽음 (출력 측)** — admin 페이지는 별도 DB 없이 `audit.jsonl` 파일을 그대로 읽어 화면에 뿌린다. 이때 `tool` 필드의 prefix(`ops__`)로 서버를 복원하고, `ts`로 시간 필터를 걸고, `decision`으로 허용/거부를 색칠한다. 레코드 필드 하나하나가 admin UI의 어떤 컬럼·필터를 위한 것인지 설계 단계에서 이미 정해져 있었다 — 그래서 필드가 6개 그 이상도 이하도 아니다.
 
@@ -188,7 +189,7 @@ def record(path: str, *, agent: str, tool: str, args: dict, decision: str, trace
 
 - **Append-only가 곧 신뢰다.** 수정·삭제 코드 경로가 *존재하지 않는다*는 사실 자체가 "변조 안 됨"의 보증이다. `"a"` 모드 한 글자에 이 철학이 응축돼 있다.
 - **가용성 > 감사 완결성 (데모 기준).** 기록 실패는 `OSError`로 잡아 에러 로그만 남기고 호출은 진행시킨다. 감사를 못 남겼다고 정상 요청을 막지 않는다.
-- **단일 진실 지점.** `decision` 4종 enum과 `trace_id`를 메트릭·트레이스와 공유해, audit·대시보드·로그가 같은 사실을 같은 어휘로 본다. 숫자가 어긋날 여지를 설계에서 제거했다.
+- **단일 진실 지점.** `decision` 5종 enum과 `trace_id`를 메트릭·트레이스와 공유해, audit·대시보드·로그가 같은 사실을 같은 어휘로 본다. 숫자가 어긋날 여지를 설계에서 제거했다.
 - **최소 구현, 표준 라이브러리만.** DB·인덱스·외부 의존성 없이 JSONL 한 줄 append로 끝낸다. 데모 시스템에 과하지 않은 딱 맞는 크기.
 - **부분 손상에 강한 포맷.** 줄당 JSON 1개(JSONL)라, 쓰다 끊겨 마지막 줄이 깨져도 그 앞 줄은 모두 유효하다.
 - **민감정보·비대화 방어.** `args_summary`를 256자에서 절단해 거대 인자와 비밀값이 통째로 기록되는 것을 막는다.
