@@ -73,6 +73,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Project-Specific Gotchas
 <!-- 자동 reflection으로 누적됨. 초기에는 비워두기 -->
+- mcp 1.27 SDK: FastMCP tool이 bare `dict` 반환 시 `structuredContent`가 None (`list[dict]`는 `{"result": [...]}` 생성). call_tool 결과 파싱은 `tests/integration/helpers.py`의 `payload()` 헬퍼로 (`structuredContent or json.loads(content[0].text)`).
+- 한 프로세스에서 uvicorn(gateway)을 2회 이상 띄우는 테스트는 매번 `sse_starlette.sse.AppStatus.should_exit=False` / `should_exit_event=None`로 리셋할 것 — 직전 테스트의 should_exit 전역이 남아 다음 SSE 응답이 즉시 닫힌다 (`tests/integration/helpers.py:95-102`).
 
 ## Measurable Conventions
 <!-- 측정 가능한 것만. "잘 짜라" 같은 추상 표현 금지 -->
