@@ -39,7 +39,9 @@ def _tokenize(text: str) -> list[str]:
 def _load() -> None:
     """corpus 디렉터리의 *.md를 전부 읽어 BM25 인덱스를 구축한다(전역 캐시 채움)."""
     global _corpus, _bm25, _doc_ids
-    corpus_dir = Path(os.environ.get("DOCS_CORPUS_DIR", _DEFAULT_CORPUS_DIR))  # env로 교체 가능(테스트)
+    corpus_dir = Path(
+        os.environ.get("DOCS_CORPUS_DIR", _DEFAULT_CORPUS_DIR)
+    )  # env로 교체 가능(테스트)
     # 파일명 stem(확장자 뺀 이름)을 doc_id로 사용. sorted로 순서를 고정해 BM25 인덱스가
     # 결정적이 되게 한다(같은 입력 → 같은 점수, 테스트 재현성).
     _corpus = {p.stem: p.read_text(encoding="utf-8") for p in sorted(corpus_dir.glob("*.md"))}

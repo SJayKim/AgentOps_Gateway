@@ -35,7 +35,9 @@ def err_payload(result) -> dict:
 async def main() -> int:
     url = os.environ.get("GATEWAY_URL", "http://localhost:8000/mcp")
     token = issue_token(AGENT, os.environ["GATEWAY_JWT_SECRET"])
-    headers = {"Authorization": f"Bearer {token}"}  # 이 토큰이 Gateway auth를 통과해 agent_id가 된다
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }  # 이 토큰이 Gateway auth를 통과해 agent_id가 된다
     async with streamablehttp_client(url, headers=headers) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
