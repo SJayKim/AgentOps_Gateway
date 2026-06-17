@@ -267,7 +267,7 @@ tr.denied { background: #fde8e8; }
   <input type="text" name="agent" placeholder="agent" value="{{ f_agent }}">
   <select name="decision">
     <option value="">모든 decision</option>
-    {% for d in ["allowed", "denied", "auth_failed", "error"] %}
+    {% for d in ["allowed", "denied", "auth_failed", "rate_limited", "error"] %}
     <option value="{{ d }}"{% if f_decision == d %} selected{% endif %}>{{ d }}</option>
     {% endfor %}
   </select>
@@ -278,7 +278,7 @@ tr.denied { background: #fde8e8; }
 
 - **`method="get"`:** 폼을 제출하면 조건이 URL 쿼리 파라미터(`?agent=...&decision=...&since=...`)가 됩니다. 그래서 `admin.py`가 `request.query_params`로 읽을 수 있고, 필터된 URL을 그대로 북마크·공유할 수 있습니다.
 - **`value="{{ f_agent }}"` / `{% if f_decision == d %} selected{% endif %}`:** 방금 건 필터 값을 입력칸·드롭다운에 되돌려 넣어, 제출 후에도 폼이 현재 상태를 기억하게 합니다(1-6에서 되돌려 준 값들).
-- decision 선택지는 `allowed / denied / auth_failed / error` 네 가지로 하드코딩 — Gateway가 남기는 decision 종류와 일치.
+- decision 선택지는 `allowed / denied / auth_failed / rate_limited / error` 다섯 가지로 하드코딩 — Gateway가 남기는 decision 종류와 일치 (`rate_limited`는 S5 stretch rate limiting이 더한 값).
 
 ### 2-4. 하단 감사 로그 테이블
 

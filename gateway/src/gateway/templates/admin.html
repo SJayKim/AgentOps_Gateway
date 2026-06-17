@@ -36,7 +36,7 @@
     <input type="text" name="agent" placeholder="agent" value="{{ f_agent }}">
     <select name="decision">
       <option value="">모든 decision</option>
-      {% for d in ["allowed", "denied", "auth_failed", "error"] %}
+      {% for d in ["allowed", "denied", "auth_failed", "rate_limited", "error"] %}
       <option value="{{ d }}"{% if f_decision == d %} selected{% endif %}>{{ d }}</option>
       {% endfor %}
     </select>

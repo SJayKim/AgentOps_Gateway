@@ -42,7 +42,7 @@ S4-S5 완료 시점 기준: 거부 payload `{"code": "POLICY_DENIED", "rule": "<
 ### Implementation Details
 
 - 새 패키지 `demo-agent/` 를 workspace member로 추가 (`pyproject.toml`: `langgraph`, `langchain-anthropic`, `mcp`). Gateway 의존성에 LLM 라이브러리를 섞지 않는다.
-- admin은 `gateway/src/gateway/admin.py` + `templates/admin.html` (jinja2).
+- admin은 `gateway/src/gateway/admin.py` + `gateway/src/gateway/templates/admin.html` (jinja2).
 - compose에 demo-agent는 넣지 않는다 — API 키가 필요한 수동 실행 데모. README에 실행법 기록.
 - README에 데모 GIF(정책 거부 → 우회 계획 장면) 추가 — Distribution Plan의 핵심 산출물.
 
@@ -82,7 +82,7 @@ LangGraph 에이전트(거부 분기 그래프 포함) 2일 + admin 페이지 1�
 |---|---|
 | `demo-agent/pyproject.toml`, `demo-agent/src/demo_agent/{__main__,graph,mcp_client}.py` | 신규 |
 | `pyproject.toml` | workspace member 추가 |
-| `gateway/src/gateway/admin.py`, `gateway/templates/admin.html` | 신규 |
+| `gateway/src/gateway/admin.py`, `gateway/src/gateway/templates/admin.html` | 신규 |
 | `gateway/pyproject.toml` | `jinja2` 추가 |
 | `tests/integration/test_admin.py` | 신규 |
 | `README.md` | 섹션 추가만 — 데모 GIF, LangGraph 실행법, 수동 체크리스트 (기본판은 S5 산출) |

@@ -31,7 +31,7 @@ gateway_policy_denied_total{agent, server, tool}          # Counter — 핵심 �
 
 ### P3: OTel trace 계측
 
-- Gateway 요청 처리 경로에 span: 요청 수신 → 인증 → 정책 평가 → 백엔드 호출. exporter는 콘솔(기본) — Jaeger/Tempo 추가는 이 spec 범위 밖 (span 구조만 잡아두면 exporter는 설정 교체).
+- Gateway 요청 처리 경로에 span: 요청 수신(최상위 span 이름 `tools/call`) → 인증 → 정책 평가 → 백엔드 호출. exporter는 콘솔(기본) — Jaeger/Tempo 추가는 이 spec 범위 밖 (span 구조만 잡아두면 exporter는 설정 교체).
 
 ### P4: E2E 스크립트 클라이언트 (Epic DoD 3)
 

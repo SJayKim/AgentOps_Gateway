@@ -244,7 +244,7 @@ Histogram의 `_bucket` 시계열에 `histogram_quantile`을 씌워 **중앙값(p
 
 이 모듈은 혼자 동작하지 않는다. 라우팅 경로(`app.py`의 `call_tool`)가 호출해야 비로소 숫자가 쌓인다. 담당 파일(observability.py)의 주석과 스펙이 그 연결을 명시한다:
 
-- **OTel span 4단계** — 한 요청의 생애를 `요청 수신 → 인증 → 정책 평가 → 백엔드 호출` 네 단계 span으로 감싼다(스펙). `tracer()`가 만든 tracer로 이 span들을 연다.
+- **OTel span 4단계** — 한 요청의 생애를 `요청 수신 → 인증 → 정책 평가 → 백엔드 호출` 네 단계 span으로 감싼다(스펙). 최상위(요청 수신) span의 실제 이름은 `tools/call`(`app.py`)이고 자식 span들이 그 trace_id를 공유한다. `tracer()`가 만든 tracer로 이 span들을 연다.
 - **trace_id 전파** — `trace_id_hex(span)`로 뽑은 32 hex가 백엔드 호출·**audit JSONL**까지 전파된다. audit의 `trace_id` 필드가 이 OTel trace ID로 채워진다(스펙: "audit의 trace_id를 OTel trace ID로 교체").
 - **decision 단일 지점** — `record_call(...)`가 `app.py`에서 `audit.record(...)`와 **나란히** 불린다(`record_call` docstring). 즉 **decision이 확정되는 한 지점**에서 메트릭과 audit이 같이 기록된다.
 - **decision enum 일치** — 메트릭의 `decision`은 `allowed | denied | auth_failed | rate_limited | error` 5종으로, audit이 기록하는 decision 어휘와 동일하다(모듈 docstring: "같은 decision enum 5종"). 그래서 **대시보드의 거부 카운트와 audit 로그의 거부 줄 수가 정확히 일치**한다 — 계기판과 기록부가 서로를 검증한다. (stretch의 rate limiting이 `rate_limited` 값을 더했다 — **기존 `TOOL_CALLS` 카운터의 라벨 값 하나가 늘었을 뿐, 새 Prometheus 메트릭이나 Grafana 패널은 만들지 않는다.** 상세는 [resilience.md](resilience.md).)

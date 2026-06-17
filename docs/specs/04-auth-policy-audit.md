@@ -75,10 +75,10 @@ analyst-agent:
 - 모든 tools/call 에 대해 1줄 기록 (`audit/audit.jsonl`, 경로는 env `GATEWAY_AUDIT_PATH`):
 
 ```json
-{"ts": "<ISO8601>", "agent": "<agent_id|anonymous>", "tool": "<prefixed name>", "args_summary": "<전체 인자 JSON의 256자 절단>", "decision": "<allowed|denied|auth_failed|error>", "trace_id": "<S5에서 채움, 그 전까지 uuid4>"}
+{"ts": "<ISO8601>", "agent": "<agent_id|anonymous>", "tool": "<prefixed name>", "args_summary": "<전체 인자 JSON의 256자 절단>", "decision": "<allowed|denied|auth_failed|rate_limited|error>", "trace_id": "<OTel trace ID>"}
 ```
 
-- 허용/거부/인증실패/오류 전부 기록. `decision: error`는 `UNKNOWN_TOOL`·`BACKEND_UNAVAILABLE` 등 정책 외 실패 — S5 메트릭의 decision 4종과 동일 enum (eng review 이슈 2: 두 시스템이 같은 사실을 보게 한다는 원칙을 enum 수준에서 유지). append-only — 수정·삭제 코드 경로 없음.
+- 허용/거부/인증실패/속도제한/오류 전부 기록. `decision: error`는 `UNKNOWN_TOOL`·`BACKEND_UNAVAILABLE` 등 정책 외 실패 — S5 메트릭의 decision 5종(`rate_limited` 포함, S5 stretch rate limiting이 더함)과 동일 enum (eng review 이슈 2: 두 시스템이 같은 사실을 보게 한다는 원칙을 enum 수준에서 유지). append-only — 수정·삭제 코드 경로 없음.
 - 기록 실패(디스크 등)는 호출을 막지 않되 에러 로그 (가용성 > 감사 완결성, 데모 시스템 기준).
 
 ### Implementation Details

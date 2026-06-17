@@ -189,7 +189,7 @@ def search_docs(query: str) -> list[dict]:
         if score > 0
     ]
 ```
-첫 호출이면 `_load()`로 인덱스를 만든다(lazy). `get_scores`가 query에 대한 문서별 점수 배열(_doc_ids 순서)을 주면, 점수 내림차순으로 정렬해 **상위 5건**만 돌려준다. 두 가지 다듬기: (1) `snippet`은 본문 앞 **160자 미리보기**라 응답이 가볍다(전체는 `read_doc`로), (2) `if score > 0`로 매치가 전혀 없는 문서(점수 0)는 결과에서 뺀다.
+첫 호출이면 `_load()`로 인덱스를 만든다(lazy). `get_scores`가 query에 대한 문서별 점수 배열(_doc_ids 순서)을 주면, 점수 내림차순으로 정렬해 **상위 5건**만 돌려준다. 두 가지 다듬기: (1) `snippet`은 본문 앞 **160자 미리보기**라 응답이 가볍다(전체는 `read_doc`로), (2) `if score > 0`로 양수 점수만 남긴다 — 매치가 전혀 없는 문서(점수 0)는 물론, 흔한 단어라 IDF가 음수가 된 문서(BM25는 음수 점수 가능)도 함께 뺀다.
 
 ```python
 def read_doc(doc_id: str) -> dict:
