@@ -5,14 +5,18 @@
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
 from gateway.app import build_app
 
+# 거부 요약은 "지난 24h" 기준이라 ts가 now에 상대적이어야 한다 — 고정 날짜면
+# 24h가 지나는 순간 요약 카운트가 0이 돼 시한폭탄처럼 깨진다.
+_NOW = datetime.now(timezone.utc)
 TOKEN = "admin-token-0123456789"
 DENIED = {
-    "ts": "2026-06-14T11:00:00+00:00",
+    "ts": (_NOW - timedelta(hours=1)).isoformat(),
     "agent": "support-agent",
     "tool": "ops__query_logs",
     "args_summary": "{}",
@@ -20,7 +24,7 @@ DENIED = {
     "trace_id": "t1",
 }
 ALLOWED = {
-    "ts": "2026-06-14T11:01:00+00:00",
+    "ts": (_NOW - timedelta(minutes=59)).isoformat(),
     "agent": "support-agent",
     "tool": "docs__search_docs",
     "args_summary": "{}",
