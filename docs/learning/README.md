@@ -37,5 +37,6 @@
 
 ## 함께 보면 좋은 문서
 
+- 트리 구조의 이유: [repo-structure.md](repo-structure.md) — "왜 폴더를 이렇게 나눴나"(워크스페이스·의존성 격리·src-layout). 기능 문서를 읽기 전 큰 틀로 먼저 보면 좋다.
 - 설계 전체: [`docs/design/agentops-gateway-design.md`](../design/agentops-gateway-design.md)
 - 기능별 스펙: [`docs/specs/`](../specs/) (S2~S6)
