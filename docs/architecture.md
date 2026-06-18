@@ -2,6 +2,9 @@
 
 > **이 문서의 목적**: "이 시스템이 무엇으로 이루어져 있고, 각 조각이 어느 코드인지"를
 > 코드를 안 열어보고도 이해하게 하는 것. 컴포넌트 → 폴더/파일 매핑이 핵심.
+>
+> 도식은 두 단계로 본다 — **2장 한눈에 보는 전체 그림**으로 큰 구조를 잡고,
+> **3장 세부 컴포넌트 그림**으로 요청 하나가 내부에서 어떻게 처리되는지 따라간다.
 
 ---
 
@@ -15,23 +18,46 @@ Gateway 한 곳으로 모아 **인증 → 정책 → 라우팅 → 관측·감�
 
 ---
 
-## 2. 큰 그림 (3개 구역)
+## 2. 한눈에 보는 전체 그림
 
-```
-┌─────────────┐        ┌───────────────────────────────────┐        ┌──────────────┐
-│   에이전트   │        │            G A T E W A Y          │        │  백엔드 MCP   │
-│  (클라이언트) │        │           (단일 진입점 :8000)      │        │   서버 3종    │
-│             │        │                                   │        │              │
-│ support     │──JWT──▶│  인증 → 정책 → 라우팅 → 관측·감사  │──중계─▶│ ticket :8101 │
-│ analyst     │  tool  │                                   │ MCP    │ docs   :8102 │
-│ admin       │  call  │                                   │ 세션   │ ops    :8103 │
-└─────────────┘        └───────────────────────────────────┘        └──────────────┘
-                              │ 메트릭/trace        │ 감사로그
-                              ▼                     ▼
-                       ┌────────────┐        ┌──────────────┐
-                       │ Prometheus │        │ audit.jsonl  │
-                       │  +Grafana  │        │ + /admin 페이지│
-                       └────────────┘        └──────────────┘
+에이전트는 Gateway만 바라보고, 백엔드는 Gateway만 받아들인다. 그 사이 **단일 길목**에서
+모든 호출이 검사·기록된다. 점선은 곁가지 산출물(관측·감사)이다.
+
+```mermaid
+flowchart LR
+    subgraph AG["🤖 에이전트 · demo-agent/"]
+        direction TB
+        A1["support-agent"]
+        A2["analyst-agent"]
+        A3["dev-agent"]
+    end
+
+    subgraph GW["🛡️ GATEWAY :8000 · gateway/"]
+        direction TB
+        P["call_tool 단일 경로<br/>① 인증 → ② 레이트리밋 → ③ 라우팅<br/>④ 정책 → ⑤ 회로차단 → ⑥ 중계"]
+    end
+
+    subgraph BE["🔧 백엔드 MCP 서버 · servers/"]
+        direction TB
+        B1["ticket :8101<br/>쓰기 있음"]
+        B2["docs :8102<br/>읽기 전용 + BM25"]
+        B3["ops :8103<br/>민감 데이터"]
+    end
+
+    AG -- "JWT + tool call" --> GW
+    GW -- "MCP 세션으로 중계" --> BE
+
+    GW -. "메트릭 · trace" .-> OBS["📊 Prometheus + Grafana<br/>observability/"]
+    GW -. "감사 한 줄 (append-only)" .-> AUD["📝 audit.jsonl<br/>+ /admin 거버넌스 페이지"]
+
+    classDef gw fill:#e8f0fe,stroke:#2e5aac,stroke-width:2px,color:#1a3a6b;
+    classDef agent fill:#eef7ee,stroke:#2e7d32,color:#1b4332;
+    classDef backend fill:#fff4e5,stroke:#c77800,color:#7a4f00;
+    classDef out fill:#f3eafc,stroke:#7b3fbf,color:#4a2275;
+    class P gw;
+    class A1,A2,A3 agent;
+    class B1,B2,B3 backend;
+    class OBS,AUD out;
 ```
 
 | 구역 | 무엇 | 폴더 |
@@ -43,34 +69,50 @@ Gateway 한 곳으로 모아 **인증 → 정책 → 라우팅 → 관측·감�
 
 ---
 
-## 3. 요청 하나가 지나는 길 (핵심 흐름)
+## 3. 세부 컴포넌트 그림 — 요청 하나가 지나는 길
 
-에이전트가 도구 하나를 호출하면, **단 하나의 처리 경로**(`call_tool`)를 통과한다.
-미들웨어 체인 같은 추상화 없이 6단계가 한 함수 안에 순서대로 끼워져 있다.
+에이전트가 도구 하나를 호출하면 **단 하나의 처리 경로**(`call_tool`)를 통과한다.
+미들웨어 체인 같은 추상화 없이 6단계가 한 함수 안에 순서대로 끼워져 있고, **각 단계는
+통과(초록)하거나 거부(빨강)한다.** 거부든 통과든 끝에서 반드시 관측·감사에 기록된다(파랑).
 
-```
- tools/call 도착
-      │
- ① 인증 (auth.py)          JWT 검증 → agent_id 확정
-      │                    실패 시 → AUTH_FAILED, 아래 단계 건너뜀
-      ▼
- ② 레이트리밋 (ratelimit.py)  이 에이전트의 토큰 통이 비었나? (stretch, opt-in)
-      │                    비었으면 → RATE_LIMITED
-      ▼
- ③ 라우팅·tool 해석 (routes.py + aggregate.py)
-      │                    "ticket__create_ticket" → (ticket, create_ticket)
-      │                    존재하지 않으면 → UNKNOWN_TOOL  ← 정책보다 먼저!
-      ▼
- ④ 정책 평가 (policy.py)     이 에이전트가 이 tool을 써도 되나? (default-deny)
-      │                    안 되면 → POLICY_DENIED
-      ▼
- ⑤ 회로 차단 확인 (circuit.py)  이 백엔드가 죽어서 차단 중인가? (stretch, opt-in)
-      │                    차단 중이면 → BACKEND_UNAVAILABLE (호출 안 함)
-      ▼
- ⑥ 백엔드 중계 (upstream.py)   실제 백엔드 MCP 세션으로 호출 → 결과 받아 옴
-      │
-      ├──▶ 관측 기록 (observability.py)  decision별 카운트 + latency
-      └──▶ 감사 기록 (audit.py)          append-only JSONL 한 줄
+```mermaid
+flowchart TD
+    IN(["tools/call 도착"]) --> AUTH
+
+    AUTH["① 인증<br/>auth.py<br/>JWT(HS256) 검증 → agent_id"]
+    RL["② 레이트리밋<br/>ratelimit.py<br/>token bucket · opt-in"]
+    ROUTE["③ 라우팅·tool 해석<br/>routes.py + aggregate.py<br/>server__tool prefix 분해"]
+    POL["④ 정책 평가<br/>policy.py<br/>YAML default-deny 매트릭스"]
+    CB["⑤ 회로 차단<br/>circuit.py<br/>fail-fast · opt-in"]
+    UP["⑥ 백엔드 중계<br/>upstream.py<br/>백엔드 MCP 세션 재사용"]
+
+    AUTH -->|ok| RL -->|ok| ROUTE -->|tool 존재| POL -->|허용| CB -->|닫힘| UP --> OK(["✅ 결과 반환"])
+
+    AUTH -->|실패| E1["⛔ AUTH_FAILED"]
+    RL -->|통 비었음| E2["⛔ RATE_LIMITED"]
+    ROUTE -->|없는 tool| E3["⛔ UNKNOWN_TOOL"]
+    POL -->|권한 없음| E4["⛔ POLICY_DENIED"]
+    CB -->|차단 중| E5["⛔ BACKEND_UNAVAILABLE"]
+
+    OK --> TAP{{"기록 분기 · app.py"}}
+    E1 --> TAP
+    E2 --> TAP
+    E3 --> TAP
+    E4 --> TAP
+    E5 --> TAP
+
+    TAP --> OBS["📊 observability.py<br/>decision별 카운트 + latency"]
+    TAP --> AUD["📝 audit.py<br/>append-only JSONL 한 줄"]
+    AUD --> ADMIN["🖥️ admin.py + admin.html<br/>거버넌스 리포트"]
+
+    classDef step fill:#eef3fb,stroke:#3461a8,stroke-width:1.5px,color:#1a3a6b;
+    classDef reject fill:#fdecea,stroke:#c0392b,color:#7b241c;
+    classDef ok fill:#e8f6ef,stroke:#1e8449,stroke-width:2px,color:#145a32;
+    classDef tap fill:#f3eafc,stroke:#7b3fbf,color:#4a2275;
+    class AUTH,RL,ROUTE,POL,CB,UP step;
+    class E1,E2,E3,E4,E5 reject;
+    class OK ok;
+    class TAP,OBS,AUD,ADMIN tap;
 ```
 
 > **순서가 의미를 가진다**:
@@ -78,13 +120,79 @@ Gateway 한 곳으로 모아 **인증 → 정책 → 라우팅 → 관측·감�
 >   잘못 분류하면 운영자가 권한 문제로 오해하기 때문. 없는 tool은 `UNKNOWN_TOOL`,
 >   있는데 권한 없는 tool만 `POLICY_DENIED`.
 > - 인증 실패도 그냥 끊지 않고 **감사·메트릭에 남긴다** — "거부 시도가 있었다"가 산출물.
+> - ②·⑤(레이트리밋·회로차단)는 stretch 기능이라 env 미설정이면 통과(no-op)한다.
 
 전체 조립과 6단계 배치는 **`gateway/src/gateway/app.py`** 의 `call_tool` 한 곳에 있다.
 이 파일이 모든 컴포넌트를 묶는 **중심 허브**다.
 
+### decision 5종 — 거부 코드 ↔ 어느 단계에서 났나
+
+페이지·메트릭·감사 로그가 **같은 어휘**(이 5개 값)로 같은 사실을 기록한다.
+
+| decision | 의미 | 발생 단계 | 도입 |
+|----------|------|-----------|------|
+| `allowed` | 통과 → 백엔드 결과 반환 | ⑥ | S3 |
+| `auth_failed` | JWT 없음·위조·만료 | ① | S4 |
+| `rate_limited` | 토큰 통이 비어 호출 차단 | ② | S5 (stretch) |
+| `denied` (`POLICY_DENIED`) | tool은 있지만 권한 없음 | ④ | S4 |
+| `error` (`UNKNOWN_TOOL`·`BACKEND_UNAVAILABLE`) | 없는 tool / 백엔드 불가 | ③·⑤ | S3 |
+
+거부·오류 payload는 모두 `errors.py` 한 곳에서 만든다 — 본문은 `{"code": ..., ...필드}` JSON 단일 블록(파싱 계약).
+
 ---
 
-## 4. 컴포넌트 ↔ 코드 매핑 (Gateway 내부)
+## 4. 권한 매트릭스 (이 프로젝트의 심장)
+
+`policies/policy.yaml`에 적힌 (에이전트 × 서버 × tool) 화이트리스트가 전부다.
+**기재 안 된 조합은 자동 거부**(default-deny). 세 에이전트는 권한 단계를 시험하는 표본이다.
+
+```mermaid
+flowchart LR
+    subgraph agents[" "]
+        direction TB
+        SA["support-agent<br/>1선 지원"]
+        AA["analyst-agent<br/>읽기 분석"]
+        DA["dev-agent<br/>개발·전권"]
+    end
+
+    subgraph servers[" "]
+        direction TB
+        T["ticket :8101"]
+        D["docs :8102"]
+        O["ops :8103<br/>민감"]
+    end
+
+    SA -->|"읽기+쓰기"| T
+    SA -->|"읽기"| D
+    SA -. "전면 거부" .-> O
+
+    AA -->|"읽기만"| T
+    AA -->|"읽기"| D
+    AA -->|"get_metrics<br/>query_logs ≤24h"| O
+
+    DA -->|"읽기+쓰기"| T
+    DA -->|"읽기"| D
+    DA -->|"전체"| O
+
+    classDef ag fill:#eef7ee,stroke:#2e7d32,color:#1b4332;
+    classDef sv fill:#fff4e5,stroke:#c77800,color:#7a4f00;
+    class SA,AA,DA ag;
+    class T,D,O sv;
+    linkStyle 2 stroke:#c0392b,stroke-dasharray:5;
+```
+
+| 에이전트 | ticket | docs | ops | 시험하는 칸 |
+|----------|--------|------|-----|-------------|
+| **support-agent** | 읽기+쓰기 | 읽기 | ❌ 전면 거부 | "민감 서버는 못 건드린다"의 기준 (S6 거부 데모 주인공) |
+| **analyst-agent** | 검색만 | 읽기 | `get_metrics`, `query_logs`(≤24h) | **인자 단위 정책** — 같은 tool도 인자값으로 거부 |
+| **dev-agent** | 읽기+쓰기 | 읽기 | 전체 | 전권 기준선 |
+
+> `analyst-agent`의 `query_logs`는 `max_range_hours: 24` 제약이 붙는다 — tool 이름만이
+> 아니라 **인자값**(`range_hours`)까지 본다. 25시간을 요청하면 `POLICY_DENIED`.
+
+---
+
+## 5. 컴포넌트 ↔ 코드 매핑 (Gateway 내부)
 
 `gateway/src/gateway/` 안의 각 파일 = 각 컴포넌트. 한 파일 = 한 책임.
 
@@ -109,7 +217,7 @@ Gateway 한 곳으로 모아 **인증 → 정책 → 라우팅 → 관측·감�
 
 ---
 
-## 5. 컴포넌트 ↔ 코드 매핑 (Gateway 바깥)
+## 6. 컴포넌트 ↔ 코드 매핑 (Gateway 바깥)
 
 ### 에이전트 (`demo-agent/`)
 | 파일 | 책임 |
@@ -138,7 +246,34 @@ Gateway 한 곳으로 모아 **인증 → 정책 → 라우팅 → 관측·감�
 
 ---
 
-## 6. 폴더 지도 (전체)
+## 7. 대표 시나리오 — 거부를 만났을 때 (S6 데모)
+
+support-agent가 권한 없는 `ops`를 건드리면 Gateway가 `POLICY_DENIED`로 막고, 에이전트는
+**LLM 판단이 아니라 그래프 구조**로 우회 계획 노드로 빠진다. "거부가 곧 산출물"인 흐름.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as support-agent (LLM)
+    participant G as Gateway :8000
+    participant O as ops :8103
+
+    A->>G: ops__get_metrics 호출 (support JWT)
+    G->>G: ④ 정책 평가 — support엔 ops 미기재
+    Note right of G: 백엔드 호출 안 함<br/>audit + 메트릭에 denied 기록
+    G-->>A: ⛔ POLICY_DENIED { rule, agent }
+    Note over A: route_after_tools가 denial 감지<br/>(분기 결정에 LLM 개입 없음)
+    A->>A: bypass 노드 — 우회 계획 생성 (1회만)
+    A-->>A: END
+```
+
+> 핵심 계약(`graph.py`): `tools` 노드가 `POLICY_DENIED`를 감지하면 `state["denial"]`에
+> payload를 박고, `route_after_tools`가 그걸 보고 `bypass`로 라우팅한다. LLM은 이 분기에
+> 관여하지 않으므로, 정책 거부 대응이 **결정론적으로** 재현된다.
+
+---
+
+## 8. 폴더 지도 (전체)
 
 ```
 AgentOps_Gateway/
@@ -175,7 +310,7 @@ AgentOps_Gateway/
 
 ---
 
-## 7. 더 깊이 보려면
+## 9. 더 깊이 보려면
 
 각 컴포넌트의 **왜 이렇게 설계했나**는 코드 모듈 docstring과
 `docs/learning/`(기능별 코드 해부)에 있다:
