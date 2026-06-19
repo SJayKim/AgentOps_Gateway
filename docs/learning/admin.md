@@ -1,4 +1,5 @@
 # 학습 자료: `Audit Admin 페이지` 완전 해부
+
 > 대상: gateway/src/gateway/admin.py, gateway/src/gateway/templates/admin.html
 > 목적: append-only audit JSONL 파일을 "지난 24시간 누가 민감 tool 접근을 시도했나"라는 한 질문에 답하는 사람용 거버넌스 리포트로 바꾸는 서버사이드 렌더링 페이지를, 비개발자도 줄 단위로 따라올 수 있게 해부한다.
 > 관련 스펙: docs/specs/06-langgraph-admin.md, docs/design/agentops-gateway-design.md
@@ -38,10 +39,10 @@
 
 설계의 큰 줄기는 **단순함**입니다. 프론트엔드 프레임워크도, 데이터베이스도 없습니다. 매 요청마다 파일을 통째로 읽어 파이썬에서 집계·필터하고 jinja2로 HTML 문자열을 만들어 돌려줍니다. 데모 규모에서는 이게 충분히 빠르고, "append-only 파일이 곧 진실"이라 별도 인덱스를 유지할 이유가 없습니다.
 
-| 파일 | 역할 |
-|---|---|
-| `admin.py` | `/admin` 라우트 등록, 토큰/쿠키 인증, audit JSONL 직독(`read_audit`), 거부 집계(`summarize_denials`), 상세 필터(`apply_filters`), 템플릿 렌더 |
-| `admin.html` | jinja2 템플릿 — 상단 거부 요약표 + 필터 폼 + 하단 감사 로그 테이블. `decision=denied` 행을 빨갛게 강조 |
+| 파일           | 역할                                                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `admin.py`   | `/admin` 라우트 등록, 토큰/쿠키 인증, audit JSONL 직독(`read_audit`), 거부 집계(`summarize_denials`), 상세 필터(`apply_filters`), 템플릿 렌더 |
+| `admin.html` | jinja2 템플릿 — 상단 거부 요약표 + 필터 폼 + 하단 감사 로그 테이블.`decision=denied` 행을 빨갛게 강조                                              |
 
 ---
 
@@ -319,6 +320,7 @@ tr.denied { background: #fde8e8; }
 4. `summarize_denials`가 지난 24h 거부를 `(agent, server)`로 묶어 상단 경보판을 만들고, `apply_filters`가 사용자 조건으로 상세 테이블을 만듭니다.
 
 **S6 데모(거부 시나리오)가 화면에 나타나는 모습:** demo-agent 중 예컨대 support-agent가 권한 없는 `ops__...` tool을 호출하면, Gateway가 YAML 정책으로 막고 `decision="denied"` 줄을 audit에 남깁니다. 그 줄이 `/admin`에서:
+
 - **상단 요약표**에 `support-agent | ops | 3` 같은 빨간 행으로 집계되고,
 - **하단 상세 테이블**에 해당 시각의 거부 행이 빨갛게 강조돼 — `tool`, `args`, `trace_id`까지 — 그대로 보입니다.
 
