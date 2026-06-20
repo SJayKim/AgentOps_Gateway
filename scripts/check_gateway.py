@@ -2,16 +2,24 @@
 
 check_servers가 백엔드에 직접 붙었다면, 이 스크립트는 Gateway를 통해서 본다 — 그래서
 tool 이름이 prefix가 붙은 형태(ticket__create_ticket 등)로 나와야 하고, 그게 곧 집계·
-라우팅이 동작한다는 증거다. 인증 없이 호출하는데, 이 스크립트는 정책 거부가 아니라
-'집계·중계 경로'를 확인하는 용도라 토큰 시나리오는 e2e_demo.py가 따로 맡는다.
+라우팅이 동작한다는 증거다. Gateway는 initialize/tools-list 같은 비-tools/call 요청을
+미인증이면 HTTP 401로 끊으므로(app.py 이중 계층 auth), dev-agent 토큰으로 붙는다.
+dev-agent를 쓰는 이유: 아래 호출(create_ticket·search_docs·get_metrics)이 전부 허용돼
+어떤 호출도 정책 거부에 걸리지 않는 유일한 에이전트라, 이 스크립트가 보려는 '집계·중계
+경로'가 정책 거부에 가려지지 않는다. 정책 거부 시나리오는 e2e_demo.py가 따로 맡는다.
+
+실행: GATEWAY_JWT_SECRET=<secret> uv run python scripts/check_gateway.py
 """
 
 import asyncio
 import json
 import os
 
+from issue_tokens import issue_token  # 발급과 검증이 같은 함수를 공유 — 토큰이 반드시 유효
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+
+AGENT = "dev-agent"  # ticket·docs·ops 전 tool 허용 — 아래 어떤 호출도 정책 거부에 안 걸린다
 
 # Gateway가 7개 tool을 prefix 붙여 노출해야 한다(3 백엔드의 tool 합집합). 이 집합과
 # 정확히 일치하는지로 AC1(집계)을 단언한다.
@@ -28,7 +36,9 @@ EXPECTED = {
 
 async def main() -> None:
     url = os.environ.get("GATEWAY_URL", "http://localhost:8000/mcp")
-    async with streamablehttp_client(url) as (r, w, _):
+    token = issue_token(AGENT, os.environ["GATEWAY_JWT_SECRET"])
+    headers = {"Authorization": f"Bearer {token}"}  # initialize/tools-list가 401에 안 막히게
+    async with streamablehttp_client(url, headers=headers) as (r, w, _):
         async with ClientSession(r, w) as session:
             await session.initialize()
 
