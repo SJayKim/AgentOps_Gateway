@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/protect_files.py\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root '.codex/hooks/protect_files.py')\"",
+            "timeout": 30,
+            "statusMessage": "Checking protected paths"
+          }
+        ]
+      }
+    ]
+  }
+}
+
