@@ -35,14 +35,23 @@
   - **결과 — 선행 리스크 해소. stateless에서 핸드셰이크가 돈다.** `initialize` → `tools/list`(백엔드 3종 집계) → `tools/call`(인증·정책·라우팅)이 세션 id 없이 끝까지 통과했다. **1C의 A 경로는 살아 있다** — T5는 두 전략을 실제로 비교할 수 있다. `app.py` 3줄(env 읽기 + `stateless=` 전달) + `tests/integration/test_stateless.py` 2케이스. 전체 104 passed.
   - **결정 — e2e 성공이 아니라 세션 id 부재로 단언한다.** e2e만 보면 토글을 무시하고 항상 stateful로 둬도 통과해서, 테스트가 토글을 검증하지 못한다. stateless 모드의 관측 가능한 차이는 서버가 `mcp-session-id`를 발급하지 않는 것이고 `streamablehttp_client`가 그 값을 `get_session_id()`로 노출한다. 가드 제거(`stateless=False` 하드코딩) 시 `assert 'e1dd005d...' is None`으로 실패하는 것을 확인 — T2·T3와 같은 절차.
   - **파싱은 `("1", "true")`만.** `yes`/`on`까지 받는 건 쓰지도 않을 유연성(CLAUDE.md Simplicity First). K8s env는 문자열이고 compose·매니페스트 둘 다 우리가 쓴다.
-- [ ] **T1 (P1, CC ~1.5시간)** — 1주차 매니페스트 + k3d(agents ≥2, `--registry-create`) + Ingress 경유 e2e
-  - **선행 블로커:** k3d 미설치 (2026-08-21 실측). helm은 2주 스코프에서 불필요 — 설치 보류. kubectl·docker는 Docker Desktop 번들로 있음.
+- [x] **T1 (P1, CC ~1.5시간)** — 1주차 매니페스트 + k3d(agents ≥2, `--registry-create`) + Ingress 경유 e2e ✅ 2026-08-21
+  - **선행 블로커 — 해소.** k3d 5.9.0을 winget(`k3d.k3d`)으로 설치. helm은 2주 스코프에 불필요해 보류 유지. kubectl(v1.34.1)·docker(29.2.1)는 Docker Desktop 번들.
   - **D6 — 6서비스 전부.** 08-15의 "Deployment×4"는 오기, ×6으로 정정. 빌드 이미지는 4개 그대로고 prom/grafana는 공식 이미지 + 설정 마운트(`observability/` 전부 합쳐 2.2KB).
   - **D7 — 이미지 반입은 k3d 내장 레지스트리.** `k3d image import` 아님(3노드 × 매 코드 변경마다 전체 복사). 30분 안에 배선이 안 풀리면 import로 폴백하고 findings에 기록.
   - **기록 의무:** `observability/prometheus.yml`의 `static_configs: ["gateway:8000"]`이 `replicas: 3`에서 임의 파드를 잡아 카운터가 튄다. **안 고친다** — ServiceMonitor는 3주차(D5 보류)이고 이 증상이 그 필요성의 실증이다. findings 여섯 번째 항목.
   - **기록 의무(신규, T3에서 발견):** **MCP 세션 핸들은 백엔드보다 오래 산다.** Streamable HTTP는 요청마다 POST라 유휴 중 백엔드가 죽어도 연결 소유 task가 `stop.wait()`에서 안 깨고, `upstream.py:64-65`의 `finally: self._session = None`이 안 돈다. 실측: 백엔드 kill 후 1초 뒤에도 `ensure_session()`이 **0.000초에 성공**해 죽은 세션을 그대로 반환한다. 설계 4B가 이걸 가정하지 못해, `ensure_session()`만 부르는 probe는 죽은 백엔드에 Ready를 준다. `send_ping()` 왕복을 얹어야 잡히고, 그 ping도 즉시 실패가 아니라 **2초 타임아웃까지 매달린다**(7A와 같은 성질). findings **일곱 번째** 항목 — K8s에서 "파드는 Ready인데 요청은 전부 실패"의 교과서 사례.
   - Files: `k8s/base/` (Deployment×6, Service×6, Ingress(gateway + grafana), ConfigMap(policy·prometheus·grafana), Secret, kustomization)
   - Verify: `GATEWAY_URL=http://<ingress>/mcp uv run python scripts/e2e_demo.py` → exit 0
+  - **결과 — 기준선 통과.** `k8s/base/` 매니페스트 9 + 설정 사본 5 → 리소스 17개(Deployment×6, Service×6, ConfigMap×3, Ingress×1, Secret×1). 6서비스 전부 3노드에 분산 Ready, Ingress 경유 e2e **exit 0**(성공-성공-거부). `/health`·`/ready`·`/metrics`·`/grafana` 전부 200, `/ready`는 백엔드 3종 `true`. 전체 109 passed(104 → +5).
+  - **D7 통과 — 폴백 불필요.** k3d 내장 레지스트리로 4종 push→pull이 `ImagePullBackOff` 없이 한 번에 붙었다. 30분 폴백 조건 미발동. 호스트는 `localhost:5111`로 push하고 매니페스트는 `agentops-registry:5000`을 참조한다 — 레지스트리는 host 접두사를 저장하지 않으므로 같은 repository다. GHCR로 갈 때 호스트명만 바뀐다는 D7 논거가 실제로 성립.
+  - **결과 — `replicas: 3`은 전면 파손.** 6회 e2e 중 **6회 실패**(`McpError: Session terminated`). 간헐이 아니라 구조다. 대조군 `GATEWAY_MCP_STATELESS=1`에서 **6/6 통과** — T4가 연 경로가 클러스터에서 실측됐고 T5의 두 전략 비교가 성립한다. audit은 18건이 세 파드에 6/7/5로 쪼개졌고 `/admin`은 200을 주면서 자기 조각만 보여준다.
+  - **findings 초안 완성** — `docs/k8s-stateful-findings.md` 8항목. 1~2·7~8은 실측, 3~5는 재현 절차만(2주차), 6은 기록만(안 고침).
+  - **신규 findings 여덟 번째 — TLS 인터셉터가 k3d 노드에서 재현됐다(설계가 예측한 그대로).** traefik이 `x509: certificate signed by unknown authority`로 `ImagePullBackOff`. 호스트 Docker는 Windows 루트를 갖고 있어 우리 이미지 빌드·push는 전부 성공했지만 **노드 containerd에는 CA가 없다.** `k3d image import` 우회는 `ctr: content digest not found`로 실패. 해결은 노드에 `certs/windows-roots.crt`를 심고 **재시작**(Go는 cert pool을 프로세스 시작 시 1회 캐시). prom/grafana는 통과해서 간헐로 보이지만 원인은 확정적이다.
+  - **결정 — ConfigMap 소스는 `k8s/base/config/`에 복사한다.** kustomize가 kustomization 루트 밖 파일을 거부한다(실측: `security; file ... is not in or below`). 사본은 조용히 썩고 그중 `policies/policy.yaml`은 권한 매트릭스라 갈라지면 클러스터와 compose의 정책이 달라진다. `tests/unit/test_k8s_config_drift.py`가 원본 5종과의 일치를 고정 — 사본을 한 줄만 바꿔도 실패하는 것을 확인(T2·T3·T4와 같은 절차).
+  - **결정 — Ingress는 host가 아니라 path로 가른다.** `gateway.localhost` 같은 host 규칙은 Windows가 `*.localhost`를 보장 해석하지 않아 클러스터 밖 e2e 검증이 DNS에 의존하게 된다. `/grafana` prefix + `/` catch-all로 두고, 그 대가로 grafana에 `GF_SERVER_ROOT_URL`·`GF_SERVER_SERVE_FROM_SUB_PATH` 2개를 준다.
+  - **T3 제약 반영 확인:** `readinessProbe.timeoutSeconds: 3`(죽은 백엔드 ping이 2초 예산을 다 쓴다). 게이트웨이는 startup/liveness=`/health`, readiness=`/ready`로 실제로 다른 probe 3종. 백엔드는 `/health`뿐이라 3종이 같은 신호다 — 대안이 없어 그대로 둔다.
+  - **매니페스트 기준선은 `replicas: 1`, stateless 미설정.** `replicas: 3`과 토글은 `kubectl scale`/`set env`로만 실험했고 파일은 안 건드렸다(수정은 2주차).
 
 ### 2주차 — 네 가지를 하나씩 결론낸다
 
