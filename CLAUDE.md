@@ -75,6 +75,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 자동 reflection으로 누적됨. 초기에는 비워두기 -->
 - mcp 1.27 SDK: FastMCP tool이 bare `dict` 반환 시 `structuredContent`가 None (`list[dict]`는 `{"result": [...]}` 생성). call_tool 결과 파싱은 `tests/integration/helpers.py`의 `payload()` 헬퍼로 (`structuredContent or json.loads(content[0].text)`).
 - 한 프로세스에서 uvicorn(gateway)을 2회 이상 띄우는 테스트는 매번 `sse_starlette.sse.AppStatus.should_exit=False` / `should_exit_event=None`로 리셋할 것 — 직전 테스트의 should_exit 전역이 남아 다음 SSE 응답이 즉시 닫힌다 (`tests/integration/helpers.py:95-102`).
+- `Backend._session`은 백엔드 프로세스가 죽어도 `None`이 되지 않는다 — Streamable HTTP는 요청마다 POST라 유휴 중인 연결 소유 task가 안 깨고 `upstream.py:64-65`의 finally가 안 돈다. `ensure_session()`은 liveness가 아니라 "한 번이라도 붙었나" 체크 (kill 1초 뒤에도 0.000초에 성공). 실제 사망 판정은 `send_ping()` 같은 왕복이 필요하고, 그 왕복은 즉시 실패가 아니라 매달리므로 `asyncio.wait_for`로 감쌀 것 (`app.py`의 `/ready` 참조).
 
 ## Measurable Conventions
 <!-- 측정 가능한 것만. "잘 짜라" 같은 추상 표현 금지 -->
