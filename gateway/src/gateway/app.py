@@ -16,6 +16,7 @@ call 단위 통제가 불가능).
   tool result는 tools/call 응답에만 존재하므로, 그게 없는 요청은 transport 표준(401)을 따른다.
 """
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -262,6 +263,60 @@ def build_app() -> FastAPI:
     @app.get("/health")  # docker compose healthcheck가 폴링하는 경량 엔드포인트
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/ready")  # K8s readinessProbe — /health와 달리 백엔드 연결을 실제로 확인한다
+    async def ready() -> Response:
+        """살아있는 백엔드가 하나라도 있으면 200, 하나도 없으면 503.
+
+        [왜 능동 probe인가 — 설계 4B]
+        `backend.tools is not None` 같은 수동 체크로 만들면 교착한다. 그 플래그를 되살리는
+        재연결 트리거가 aggregate.py:69-73·routes.py:71-76의 지연 재집계뿐인데, 둘 다 요청을
+        받아야 돌고 NotReady 파드는 트래픽을 못 받는다 — 한 번 NotReady가 되면 영영 못 돌아온다.
+        그래서 여기서 ensure_session()을 직접 부른다.
+
+        [왜 ensure_session()만으로는 부족한가 — 실측으로 4B를 보강]
+        ensure_session()은 self._session이 None이 아니면 그대로 돌려준다(upstream.py:97).
+        그런데 Streamable HTTP는 요청마다 POST라 유휴 중에 백엔드가 죽어도 소유 task는
+        stop.wait()에서 깨지 않고, upstream.py:64-65의 finally도 안 돈다 — 세션 핸들이
+        백엔드보다 오래 산다. 실측: 백엔드를 죽이고 1초 뒤에도 ensure_session()이 0.000초에
+        '성공'한다. 즉 그것만 쓰면 죽은 백엔드에 대고 Ready를 준다. MCP는 요청을 실제로
+        보내봐야 죽음을 안다(_race_call이 존재하는 이유). 그래서 ping까지 왕복한다.
+
+        [왜 2초 타임아웃인가 — findings 7A]
+        ensure_session()은 백엔드별 락을 쥔 채 연결하고, 행 걸린 백엔드에선 MCP SDK 기본
+        read 타임아웃(300초)까지 락이 안 풀린다. 죽은 세션의 ping도 빠르게 실패하지 않고
+        매달린다(실측 2초 타임아웃까지). 연결과 ping을 한 예산에 묶고, 백엔드 3개를 동시에
+        걸어 엔드포인트 전체를 2초로 막는다(순차면 6초라 kubelet timeoutSeconds를 넘긴다).
+
+        [왜 '전부'가 아니라 '하나라도'인가]
+        백엔드 1개가 죽었다고 게이트웨이 파드를 로드밸런서에서 빼면 나머지 2개로 가는 멀쩡한
+        요청까지 함께 죽는다. 위 lifespan과 aggregate.py가 이미 "부분 가용성 > 전체 다운"
+        (eng review T1)으로 서 있어 그 결정을 여기서 뒤집지 않는다.
+        """
+
+        async def probe(backend: Backend) -> bool:
+            async def reachable():
+                session = await backend.ensure_session()  # 없으면 붙는다(4B: NotReady 교착 해소)
+                await session.send_ping()  # 핸들이 아니라 '지금 왕복이 되는가'를 본다
+
+            try:
+                await asyncio.wait_for(reachable(), timeout=2.0)
+                return True
+            except Exception:
+                # 연결 실패·핸드셰이크 실패·타임아웃 모두 '이 백엔드는 지금 못 쓴다'로 같게 다룬다.
+                # 세션을 여기서 버리지는 않는다 — 백엔드가 돌아오면 같은 핸들로 ping이 다시
+                # 통하는 것을 실측했고, probe가 공유 세션을 건드리면 일시적 지연 한 번에
+                # 멀쩡한 세션을 끊게 된다.
+                return False
+
+        names = list(backends)
+        results = await asyncio.gather(*(probe(backends[name]) for name in names))
+        connected = dict(zip(names, results))  # 어느 백엔드가 죽었는지 응답 본문에 남긴다(진단용)
+        ok = any(results)
+        return JSONResponse(
+            {"status": "ready" if ok else "not ready", "backends": connected},
+            status_code=200 if ok else 503,
+        )
 
     # /admin 거버넌스 페이지 등록(S6 Part B). ADMIN_TOKEN 미설정이면 admin 내부에서 전부 403.
     admin.register(app, audit_path, os.environ.get("ADMIN_TOKEN"))
