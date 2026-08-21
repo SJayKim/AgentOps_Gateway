@@ -1,0 +1,27 @@
+# host 없는 단일 Ingress — k3d가 8080:80@loadbalancer로 묶어둔 traefik으로 들어온다.
+# host 기반(gateway.localhost 등)을 안 쓰는 이유: Windows가 *.localhost를 보장 해석하지
+# 않아서 클러스터 밖 e2e 검증이 DNS에 의존하게 된다.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentops
+spec:
+  rules:
+    - http:
+        paths:
+          # 더 긴 prefix가 먼저 매칭된다 — /grafana가 게이트웨이 catch-all에 먹히지 않는다.
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
+          # 게이트웨이는 /mcp 외에 /health·/ready·/metrics·/admin도 밖에서 봐야 한다.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000

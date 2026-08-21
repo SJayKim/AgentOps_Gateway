@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1  # 1주차 기준선. replicas: 3에서 무엇이 깨지는지는 별도 관찰 단계(findings).
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+        - name: gateway
+          image: agentops-registry:5000/agentops/gateway:dev
+          imagePullPolicy: Always  # :dev는 가변 태그 — 재push가 반영되게 한다
+          ports:
+            - containerPort: 8000
+          env:
+            - name: BACKEND_TICKET_URL
+              value: http://ticket-server:8101/mcp
+            - name: BACKEND_DOCS_URL
+              value: http://docs-server:8102/mcp
+            - name: BACKEND_OPS_URL
+              value: http://ops-server:8103/mcp
+            - name: GATEWAY_AUDIT_PATH
+              value: /app/audit/audit.jsonl
+            - name: GATEWAY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secrets
+                  key: GATEWAY_JWT_SECRET
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secrets
+                  key: ADMIN_TOKEN
+          volumeMounts:
+            # 이미지에 박힌 policies/policy.yaml을 ConfigMap으로 덮어쓴다 — 정책 변경에
+            # 이미지 재빌드가 필요 없게.
+            - name: policy
+              mountPath: /app/policies/policy.yaml
+              subPath: policy.yaml
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 30  # 최대 60초 기동 허용
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            # /health와 달리 백엔드 연결을 실제로 왕복한다(app.py:271).
+            httpGet:
+              path: /ready
+              port: 8000
+            periodSeconds: 5
+            # T3 실측 제약: 죽은 백엔드의 ping이 2초 예산을 다 쓴다. 3 미만이면 kubelet이
+            # 먼저 끊어 멀쩡한 파드가 NotReady가 된다.
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: policy
+          configMap:
+            name: gateway-policy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  selector:
+    app: gateway
+  ports:
+    - port: 8000
+      targetPort: 8000

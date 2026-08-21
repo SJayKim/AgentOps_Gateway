@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-server
+spec:
+  replicas: 1  # 1주차 기준선. ticket-server의 replicas: 3 조용한 소실은 T6에서 재현한다.
+  selector:
+    matchLabels:
+      app: ops-server
+  template:
+    metadata:
+      labels:
+        app: ops-server
+    spec:
+      containers:
+        - name: ops-server
+          image: agentops-registry:5000/agentops/ops-server:dev
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8103
+          # 백엔드는 /health뿐이다(server.py). 게이트웨이와 달리 능동 probe 대상이 없다.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8103
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8103
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8103
+            periodSeconds: 5
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ops-server
+spec:
+  selector:
+    app: ops-server
+  ports:
+    - port: 8103
+      targetPort: 8103

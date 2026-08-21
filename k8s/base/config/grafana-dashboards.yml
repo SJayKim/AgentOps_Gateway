@@ -1,0 +1,9 @@
+# 대시보드 JSON 자동 로드 — docker compose up 만으로 대시보드가 뜬다 (S5 P2)
+apiVersion: 1
+
+providers:
+  - name: gateway
+    folder: ""
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

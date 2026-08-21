@@ -1,0 +1,28 @@
+# ConfigMap 원본은 policies/·observability/에 있지만 kustomize가 kustomization 루트 밖
+# 파일을 거부한다(실측). 그래서 config/에 사본을 두고, 사본이 조용히 썩지 않도록
+# tests/unit/test_k8s_config_drift.py로 원본과의 일치를 고정한다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - secret.yaml
+  - gateway.yaml
+  - ticket-server.yaml
+  - docs-server.yaml
+  - ops-server.yaml
+  - prometheus.yaml
+  - grafana.yaml
+  - ingress.yaml
+
+configMapGenerator:
+  - name: gateway-policy
+    files:
+      - policy.yaml=config/policy.yaml
+  - name: prometheus-config
+    files:
+      - prometheus.yml=config/prometheus.yml
+  - name: grafana-config
+    files:
+      - datasources.yml=config/grafana-datasources.yml
+      - dashboards.yml=config/grafana-dashboards.yml
+      - gateway.json=config/grafana-dashboard-gateway.json
