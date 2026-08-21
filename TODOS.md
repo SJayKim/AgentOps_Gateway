@@ -27,11 +27,14 @@
   - **결정 — '전부'가 아니라 '하나라도'.** 설계 4B가 임계값을 안 정했다. 전부를 요구하면 백엔드 1개 사망에 게이트웨이 파드가 LB에서 빠져 나머지 2개로 가는 멀쩡한 요청까지 죽는다. `app.py`의 lifespan과 `aggregate.py`가 이미 "부분 가용성 > 전체 다운"(eng review T1)이라 그 결정을 뒤집지 않았다. 테스트로 고정.
   - **4B 보강 — `ensure_session()`만으로는 죽음을 못 잡는다.** 아래 findings 일곱 번째 참조. `send_ping()` 왕복을 얹어야 통과했다.
   - **부수 결정:** 7A의 `wait_for(..., timeout=2)`를 백엔드마다 순차로 걸면 최대 6초라 kubelet `timeoutSeconds`를 넘긴다. `asyncio.gather`로 동시 실행해 엔드포인트 전체를 2초로 묶었다.
-- [ ] **T4 (P2, CC ~15분)** — `GATEWAY_MCP_STATELESS` env 토글
+- [x] **T4 (P2, CC ~15분)** — `GATEWAY_MCP_STATELESS` env 토글 ✅ 2026-08-21
   - **Why:** 결정 1C(두 세션 전략 비교)를 이미지 하나로 하려면 필수. 하드코딩하면 실험 자체가 불가능. SDK 1.27 `StreamableHTTPSessionManager(stateless=...)` 기본 False.
   - **선행 리스크:** stateless 모드에서 `streamablehttp_client` 핸드셰이크가 도는지 **미검증.** 안 돌면 1C의 A 경로가 통째로 사라진다 → T5보다 먼저 확인할 것.
   - Files: `gateway/src/gateway/app.py:187`
   - Verify: 토글 on/off 각각에서 e2e 통과
+  - **결과 — 선행 리스크 해소. stateless에서 핸드셰이크가 돈다.** `initialize` → `tools/list`(백엔드 3종 집계) → `tools/call`(인증·정책·라우팅)이 세션 id 없이 끝까지 통과했다. **1C의 A 경로는 살아 있다** — T5는 두 전략을 실제로 비교할 수 있다. `app.py` 3줄(env 읽기 + `stateless=` 전달) + `tests/integration/test_stateless.py` 2케이스. 전체 104 passed.
+  - **결정 — e2e 성공이 아니라 세션 id 부재로 단언한다.** e2e만 보면 토글을 무시하고 항상 stateful로 둬도 통과해서, 테스트가 토글을 검증하지 못한다. stateless 모드의 관측 가능한 차이는 서버가 `mcp-session-id`를 발급하지 않는 것이고 `streamablehttp_client`가 그 값을 `get_session_id()`로 노출한다. 가드 제거(`stateless=False` 하드코딩) 시 `assert 'e1dd005d...' is None`으로 실패하는 것을 확인 — T2·T3와 같은 절차.
+  - **파싱은 `("1", "true")`만.** `yes`/`on`까지 받는 건 쓰지도 않을 유연성(CLAUDE.md Simplicity First). K8s env는 문자열이고 compose·매니페스트 둘 다 우리가 쓴다.
 - [ ] **T1 (P1, CC ~1.5시간)** — 1주차 매니페스트 + k3d(agents ≥2, `--registry-create`) + Ingress 경유 e2e
   - **선행 블로커:** k3d 미설치 (2026-08-21 실측). helm은 2주 스코프에서 불필요 — 설치 보류. kubectl·docker는 Docker Desktop 번들로 있음.
   - **D6 — 6서비스 전부.** 08-15의 "Deployment×4"는 오기, ×6으로 정정. 빌드 이미지는 4개 그대로고 prom/grafana는 공식 이미지 + 설정 마운트(`observability/` 전부 합쳐 2.2KB).
