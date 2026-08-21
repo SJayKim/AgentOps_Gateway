@@ -197,7 +197,11 @@ def build_app() -> FastAPI:
             return result
 
     # Streamable HTTP transport 매니저 — 위 Server를 HTTP 세션 프로토콜로 노출한다.
-    manager = StreamableHTTPSessionManager(app=server)
+    # GATEWAY_MCP_STATELESS=1이면 요청마다 새 transport를 만들어 세션 상태를 파드에 남기지
+    # 않는다. 결정 1C(두 세션 전략)를 이미지 하나로 비교하려면 토글이어야 한다 — 하드코딩하면
+    # 실험 자체가 불가능. 기본값은 SDK 기본과 같은 stateful.
+    stateless = os.environ.get("GATEWAY_MCP_STATELESS", "").lower() in ("1", "true")
+    manager = StreamableHTTPSessionManager(app=server, stateless=stateless)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
