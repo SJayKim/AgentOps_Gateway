@@ -1,7 +1,7 @@
 # TODOS
 
 > **트랙 상태 (2026-08-18 정리)**
-> - **B / 커리어 축 (K8s stateful scale-out) — ACTIVE.** 혼자 끝낼 수 있는 유일한 트랙. 설계 `docs/design/k8s-stateful-scale-out.md` (2026-08-15 REVISED, 2주 확정).
+> - **B / 커리어 축 (K8s stateful scale-out) — ACTIVE.** 혼자 끝낼 수 있는 유일한 트랙. 설계 `docs/design/k8s-stateful-scale-out.md` (2026-08-15 REVISED, 2주 확정 / 2026-08-21 D6·D7로 T1 미결정 2건 해소).
 > - **A / wedge 축 (Evidence Box) — PARKED.** 진행이 상대 회사 2차 대화 일정에 묶여 있어 자력 진행 불가. 설계 `docs/design/evidence-box-pilot.md` (2026-07-06 APPROVED, 구현 0줄).
 > - 두 축은 병존한다. B가 A를 supersede하지 않으며, **compose 경로는 건드리지 않는다** (K8s 설계 § 의도적으로 안 하는 것).
 
@@ -13,10 +13,11 @@
 
 ### 1주차 — 올리고, 깨뜨린다
 
-- [ ] **T2 (P1, CC ~10분)** — `build_app()`에서 `GATEWAY_JWT_SECRET` 기동 검증
+- [x] **T2 (P1, CC ~10분)** — `build_app()`에서 `GATEWAY_JWT_SECRET` 기동 검증 ✅ 2026-08-21
   - **Why:** `auth.py:38`이 `os.environ[...]`을 직접 읽어 `KeyError`가 요청마다 터진다. `app.py:223`의 `except auth.AuthError`가 못 잡고, `app.py:96` 컨벤션("환경 의존은 전부 `build_app()` 진입 시 1회")을 이 파일만 어긴다. K8s에서 `secretKeyRef` 오타 하나면 Secret 없는 파드가 `/health` ok로 Ready가 되고 전 요청 500.
   - Files: `gateway/src/gateway/app.py`
   - Verify: `monkeypatch.delenv` 후 `build_app()`이 명확한 메시지로 실패 (`conftest.py:20`이 `setdefault`로 심으므로 delenv 필수)
+  - **결과:** `build_app()` 최상단 `RuntimeError` 가드 + `tests/unit/test_app_startup.py`(미설정·빈 문자열 2케이스). 가드 제거 시 `build_app()`이 **성공**하는 것을 확인 — 그게 원래 버그. 빈 문자열을 함께 막은 이유: HS256은 빈 키로도 검증을 수행해 KeyError 없이 전 토큰이 조용히 invalid가 된다. 전체 99 passed.
 - [ ] **T3 (P1, CC ~20분)** — `/ready` 능동 probe + 2초 타임아웃
   - **Why:** `/health`가 무조건 ok라 probe 3종이 실제로는 같은 probe 하나(4B). `upstream.py:96-100`은 행 걸린 백엔드에서 SDK 기본 `read=300`으로 락을 5분 잡는다(7A).
   - **함정:** `backend.tools is not None` 체크로 만들면 교착한다 — 재연결 트리거(`aggregate.py:69-73`, `routes.py:71-76`)가 요청을 받아야 도는데 NotReady 파드는 요청을 못 받는다. **반드시 `ensure_session()`을 직접 호출하는 능동 probe.**
@@ -27,8 +28,12 @@
   - **선행 리스크:** stateless 모드에서 `streamablehttp_client` 핸드셰이크가 도는지 **미검증.** 안 돌면 1C의 A 경로가 통째로 사라진다 → T5보다 먼저 확인할 것.
   - Files: `gateway/src/gateway/app.py:187`
   - Verify: 토글 on/off 각각에서 e2e 통과
-- [ ] **T1 (P1, CC ~1시간)** — 1주차 매니페스트 + k3d(agents ≥2) + Ingress 경유 e2e
-  - Files: `k8s/base/` (Deployment×4, Service×4, Ingress, ConfigMap, Secret, kustomization)
+- [ ] **T1 (P1, CC ~1.5시간)** — 1주차 매니페스트 + k3d(agents ≥2, `--registry-create`) + Ingress 경유 e2e
+  - **선행 블로커:** k3d 미설치 (2026-08-21 실측). helm은 2주 스코프에서 불필요 — 설치 보류. kubectl·docker는 Docker Desktop 번들로 있음.
+  - **D6 — 6서비스 전부.** 08-15의 "Deployment×4"는 오기, ×6으로 정정. 빌드 이미지는 4개 그대로고 prom/grafana는 공식 이미지 + 설정 마운트(`observability/` 전부 합쳐 2.2KB).
+  - **D7 — 이미지 반입은 k3d 내장 레지스트리.** `k3d image import` 아님(3노드 × 매 코드 변경마다 전체 복사). 30분 안에 배선이 안 풀리면 import로 폴백하고 findings에 기록.
+  - **기록 의무:** `observability/prometheus.yml`의 `static_configs: ["gateway:8000"]`이 `replicas: 3`에서 임의 파드를 잡아 카운터가 튄다. **안 고친다** — ServiceMonitor는 3주차(D5 보류)이고 이 증상이 그 필요성의 실증이다. findings 여섯 번째 항목.
+  - Files: `k8s/base/` (Deployment×6, Service×6, Ingress(gateway + grafana), ConfigMap(policy·prometheus·grafana), Secret, kustomization)
   - Verify: `GATEWAY_URL=http://<ingress>/mcp uv run python scripts/e2e_demo.py` → exit 0
 
 ### 2주차 — 네 가지를 하나씩 결론낸다
@@ -77,11 +82,12 @@
 
 ## D. 미승인 제안 (승인되면 위 트랙으로 이동)
 
-08-15 `/plan-eng-review`가 찾았으나 아직 승인되지 않은 3건. 승인 전까지 착수하지 않는다.
+08-15 `/plan-eng-review`가 찾은 미승인 건 + 이후 발견분. 승인 전까지 착수하지 않는다.
 
 1. **`ratelimit.py:42` ConfigMap 값 검증 없음** — `capacity = int(cap)`. "한도를 레플리카 수로 나눈다"는 10/3을 계산하게 만드는데 `int("3.33")`은 ValueError로 기동 실패. ConfigMap 세계에선 오타 = CrashLoopBackOff.
 2. **`admin.py:49` audit 전체 파일 매 요청 메모리 로드** — `p.read_text()`. docstring의 "데모 규모에선 충분히 빠르다" 전제는 audit이 컨테이너와 함께 사라져서 성립했다. 3C에서 PVC를 붙이면 파일이 무한히 자라고 로테이션이 없다.
 3. (compose audit 영속성 → B 트랙으로 배치 완료)
+4. **`gateway/Dockerfile:6` — `COPY . .`가 `uv sync`보다 앞** (2026-08-21 D7 검토 중 발견). 소스 한 줄만 바뀌어도 의존성 레이어가 통째로 재빌드된다. 백엔드 3종 Dockerfile도 같은 패턴. compose에선 빌드가 드물어 안 드러났지만 T2·T3·T4는 매번 재빌드 → push → rollout이라 반복 비용이 D7보다 **여기 먼저** 걸린다. 고치면 `pyproject.toml`/`uv.lock`을 먼저 COPY하는 2단 구조.
 
 ---
 
