@@ -95,6 +95,18 @@ def build_app() -> FastAPI:
     깨끗한 앱(백엔드/정책/감사 경로가 env로 주입된)을 얻을 수 있어야 하기 때문이다.
     환경 의존은 전부 이 함수 진입 시점에 os.environ에서 한 번 읽는다.
     """
+    # JWT secret은 기동에서 끊는다 — auth.py:38이 요청마다 os.environ[...]을 직접 읽는데, 그
+    # KeyError는 아래 call_tool의 except auth.AuthError에 걸리지 않아 전 요청이 500이 된다.
+    # /health는 무조건 ok이므로 그런 파드도 Ready로 트래픽을 받는다(K8s에서 secretKeyRef 오타
+    # 하나면 이 상태). 빈 문자열도 같이 막는다 — HS256은 빈 키로도 검증을 수행해서, 터지는 대신
+    # 모든 토큰이 조용히 invalid가 되는 더 나쁜 실패가 된다.
+    if not os.environ.get("GATEWAY_JWT_SECRET"):
+        raise RuntimeError(
+            "GATEWAY_JWT_SECRET이 설정되지 않았거나 비어 있다. Gateway는 이 secret으로 모든 "
+            "요청의 JWT를 검증하므로 없으면 단 한 건도 처리하지 못한다. env로 주입할 것 "
+            "(compose: docker-compose.yml, K8s: Secret + secretKeyRef)."
+        )
+
     # 백엔드 prefix → Backend 객체("백엔드당 MCP 세션 1개"를 들고 있음 — upstream.py 참조).
     backends = {
         name: Backend(name, os.environ.get(env, default)) for name, env, default in BACKEND_SPECS
