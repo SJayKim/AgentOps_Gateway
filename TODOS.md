@@ -55,9 +55,14 @@
 
 ### 2주차 — 네 가지를 하나씩 결론낸다
 
-- [ ] **T5 (P1, CC ~1시간)** — 두 세션 전략 재현 + findings 초안
+- [x] **T5 (P1, CC ~1시간)** — 두 세션 전략 재현 + findings ✅ 2026-08-25
   - **Why (결정 1C):** 문제는 4개가 아니라 **2개의 결정**이다. `ratelimit.py:47` `allow(self, agent)`가 IP가 아닌 agent를 키로 쓰므로 sessionAffinity를 고르면 rate limit이 자동 해결되지만 3주차 KEDA가 자기모순이 된다(고정된 클라이언트가 스케일아웃을 못 나눠 받음). stateless는 그 반대.
   - Files: `k8s/overlays/`, `docs/k8s-stateful-findings.md`
+  - **결과 — 전략 A(sessionAffinity) 기각, B(stateless) 확정.** 오버레이 2종(`k8s/overlays/session-affinity/`, `k8s/overlays/stateless/`)으로 박제. affinity는 인그레스 경유 e2e **0/6**, stateless는 **6/6**. 전체 109 passed(변동 없음), 클러스터는 기준선(`replicas: 1`, 토글 미설정)으로 복귀.
+  - **핵심 실측 — affinity는 정상 동작하는데 인그레스가 통째로 우회한다.** 같은 순간 같은 설정에서 ClusterIP 직결은 30회가 **30/0/0**으로 완벽히 고정되고 e2e **6/6 통과**, 그런데 인그레스 경유는 **10/10/10**에 e2e **0/6**. 원인은 k3s traefik이 `--providers.kubernetesingress`를 nativeLB 없이 띄워 EndpointSlice의 파드 IP를 직접 치기 때문 — kube-proxy가 경로에 없으니 kube-proxy가 구현하는 affinity도 없다. **`kubectl get svc`는 `sessionAffinity: ClientIP`를 정상 출력한다** — 경고도 이벤트도 없이 아무 일도 안 하는 종류의 실패다.
+  - **두 번째 기각 사유 — 고쳐도 파드 재시작을 못 넘는다.** affinity가 동작하는 경로에서 세션을 열고 고정 파드를 kill: `BEFORE_KILL isError=False` → `AFTER_KILL McpError: Session terminated / Session termination failed: 404`. 같은 실험이 stateless에선 `AFTER_KILL isError=False`. 고정은 경로만 정할 뿐 세션 상태를 복제하지 않는다. rollout·eviction·drain·scale-down이 전부 여기 걸린다 — **배포할 때마다 진행 중인 세션이 끊긴다.**
+  - **결정 — 1C의 트레이드오프는 존재하지 않는다.** "affinity를 고르면 rate limit이 부수적으로 해결된다"가 전제였는데 affinity가 선택지가 아니다. rate limit(§3)은 세션 전략과 무관하게 **독립 문제**로 내려간다. 2주차가 결론낼 결정은 둘이 아니라 하나다 — **T9의 "두 결정" 구조를 이에 맞춰 다시 볼 것.**
+  - **부수 실측 — audit 쪼개짐 재확인.** stateless 6회(도구 호출 18건)가 3파드에 **6/6/6**. T1의 6/7/5와 같은 현상이다.
 - [ ] **T6 (P1, CC ~15분)** — ticket-server `replicas: 3` 조용한 소실 재현
   - **Why (결정 2B):** `servers/ticket/src/ticket_server/db.py:35` 파드 로컬 SQLite. 게이트웨이 4문제는 전부 시끄럽게 깨지는데(핸드셰이크 실패, 즉시 거부, 목록 불일치) **이것만 에러 없이 빈 결과.** 결론은 "replicas 1 고정 + 근거" — circuit breaker의 "파드별이 의미적으로 옳다"와는 **종류가 다른** 미수정 결론.
   - Files: `k8s/base/ticket-server.yaml`, `docs/k8s-stateful-findings.md`

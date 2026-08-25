@@ -1,0 +1,10 @@
+# 세션 전략 B — GATEWAY_MCP_STATELESS=1로 세션 자체를 없앤다(T4의 토글, app.py:203-204).
+# 어느 파드가 받아도 되므로 고정이 필요 없다. replicas: 3은 A와 같은 이유로 오버레이의 일부.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: gateway.yaml

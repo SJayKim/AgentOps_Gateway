@@ -1,0 +1,10 @@
+# 세션 전략 A — Service sessionAffinity: ClientIP로 같은 클라이언트를 같은 파드에 고정한다.
+# replicas: 3은 이 오버레이의 일부다. 레플리카가 1이면 두 전략이 구분되지 않는다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: gateway.yaml

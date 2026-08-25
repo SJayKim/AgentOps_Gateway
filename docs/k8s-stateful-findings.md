@@ -1,7 +1,8 @@
 # K8s Stateful Scale-Out — Findings (1주차 초안)
 
 단일 노드 compose에서 잘 돌던 MCP Gateway를 3노드 k3d에 올리고 `replicas: 3`으로 밀었을 때
-무엇이 깨지는지의 기록. **1주차 범위는 재현 절차 + 증상까지다.** 선택지 비교와 결론은 2주차.
+무엇이 깨지는지의 기록. **1주차 범위는 재현 절차 + 증상까지다.** 선택지 비교와 결론은 2주차 —
+그중 세션 전략은 §1-A에서 끝났다(T5).
 
 설계: `docs/design/k8s-stateful-scale-out.md`
 
@@ -43,6 +44,79 @@ kubectl set env deployment/gateway GATEWAY_MCP_STATELESS=1
 토글은 T4에서 넣었다(`app.py:203-204`). **이 대조군이 2주차 선택지 비교의 전제 조건이다** —
 stateless 경로가 실제로 도는 것이 확인됐으므로 `sessionAffinity`와 실측으로 비교할 수 있다.
 무엇을 잃는지(세션 상태에 기대는 MCP 기능)의 판단은 2주차.
+
+## 1-A. 두 세션 전략 — 실측 비교와 결론 ✅실측 (T5)
+
+§1이 "`replicas: 3`이면 깨진다"까지였다면 여기는 **무엇을 택할 것인가**다. 후보는 둘이다.
+A) Service `sessionAffinity: ClientIP`로 같은 클라이언트를 같은 파드에 고정한다.
+B) `GATEWAY_MCP_STATELESS=1`로 세션 자체를 없앤다(T4의 토글).
+둘 다 오버레이로 박제해 뒀다 — `k8s/overlays/session-affinity/`, `k8s/overlays/stateless/`.
+
+| 측정 | A: affinity | B: stateless |
+|---|---|---|
+| Ingress 경유 e2e ×6 | **0 PASS / 6 FAIL** | **6 PASS / 0 FAIL** |
+| Ingress 경유 LB 분포(30회) | 10 / 10 / 10 — **고정 안 됨** | 균등 |
+| ClusterIP 직결 LB 분포(30회) | 30 / 0 / 0 — **완벽히 고정** | 흩어짐 |
+| ClusterIP 직결 e2e ×6 | **6 PASS / 0 FAIL** | — |
+| 고정 파드 kill 후 세션 | **끊김** | **생존** |
+
+### A가 실패하는 첫 번째 이유 — 인그레스가 우회한다
+
+같은 클러스터, 같은 Service, 같은 affinity 설정, 같은 순간이다. 유일한 차이는 요청이
+kube-proxy를 지나느냐다. **affinity는 정상 동작한다 — 실제 트래픽이 그 경로로 안 갈 뿐이다.**
+
+`sessionAffinity`는 kube-proxy가 **ClusterIP 트래픽에 대해** 구현한다. 그런데 k3s의 traefik은
+ClusterIP를 쓰지 않는다. `--providers.kubernetesingress`가 nativeLB 없이 떠 있어서
+EndpointSlice의 파드 IP를 읽어 **직접** LB한다.
+
+```
+Service ClusterIP : 10.43.245.45                            <- 경로에 없다
+EndpointSlice     : 10.42.2.14 / 10.42.1.18 / 10.42.0.17    <- traefik이 직접 친다
+```
+
+외부 트래픽은 전부 traefik 파드 하나(`10.42.1.11`)에서 오므로 게이트웨이가 보는 클라이언트 IP는
+**원래 1개다.** affinity가 경로에 있었다면 3파드가 아니라 1파드로 전부 몰렸어야 한다.
+10/10/10이 나왔다는 건 kube-proxy가 애초에 관여하지 않았다는 뜻이다.
+
+**가장 나쁜 점은 조용하다는 것이다.** `kubectl get svc gateway`는 `sessionAffinity: ClientIP`를
+정상 출력한다(타임아웃 10800초까지). 설정은 적용됐고 이벤트도 경고도 로그도 없다. 아무 일도 안
+할 뿐이다. "yaml에 썼으니 됐겠지"가 통하지 않는 종류의 실패다.
+
+traefik 어노테이션(`service.nativelb`)으로 경로에 넣을 수는 있다. 그런데 고쳐도 두 번째 이유가 남는다.
+
+### A가 실패하는 두 번째 이유 — 파드 재시작을 못 넘는다
+
+affinity가 실제로 동작하는 경로(ClusterIP 직결)에서 세션을 열고, 고정된 파드를 죽이고,
+같은 세션으로 다시 호출했다.
+
+```
+BEFORE_KILL isError=False
+AFTER_KILL  McpError: Session terminated
+            Session termination failed: 404
+```
+
+같은 실험을 B에서 하면 `AFTER_KILL isError=False` — 그냥 지나간다.
+
+고정은 "어느 파드로 갈지"를 정할 뿐 **세션 상태를 복제하지 않는다.** 그 파드가 사라지면 상태도
+사라진다. K8s에서 파드 재시작은 사고가 아니라 일상이다 — rollout, eviction, node drain,
+scale-down. **배포할 때마다 진행 중인 모든 세션이 끊긴다.**
+
+### 결론 — B(stateless)를 택한다
+
+A는 독립된 두 이유로 기각된다. 인그레스 우회는 고칠 수 있지만 파드 재시작은 못 고친다(세션 상태
+복제는 이 프로젝트가 만들려는 것보다 크다). 여기에 3주차 KEDA와의 자기모순이 겹친다 — 고정된
+클라이언트는 스케일아웃을 나눠 받지 못한다.
+
+**B의 대가는 정직하게 적어 둔다.** stateless는 audit 쪼개짐(§2)도 rate limit 배증(§3)도
+해결하지 않는다. 다만 그 둘은 stateless가 **만든** 문제가 아니다 — affinity에서도 버킷과 파일은
+똑같이 파드 로컬이다. stateless는 숨을 곳을 없앴을 뿐이다.
+
+### 1C 재정리 — 결정이 하나 줄었다
+
+원래 프레이밍은 "affinity를 고르면 rate limit이 부수적으로 해결되지만 3주차 KEDA가 자기모순이
+된다, stateless는 그 반대"였다. **그 트레이드오프는 존재하지 않는다.** affinity가 선택지가 아니므로
+rate limit은 세션 전략과 무관하게 **독립적으로** 풀어야 하는 문제다. 2주차가 결론낼 결정은 둘이
+아니라 하나고(세션 전략 = B 확정), 나머지는 개별 문제로 내려간다.
 
 ## 2. audit 로그 — 파드마다 쪼개진다 ✅실측
 
