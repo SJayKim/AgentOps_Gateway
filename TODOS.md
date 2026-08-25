@@ -63,9 +63,13 @@
   - **두 번째 기각 사유 — 고쳐도 파드 재시작을 못 넘는다.** affinity가 동작하는 경로에서 세션을 열고 고정 파드를 kill: `BEFORE_KILL isError=False` → `AFTER_KILL McpError: Session terminated / Session termination failed: 404`. 같은 실험이 stateless에선 `AFTER_KILL isError=False`. 고정은 경로만 정할 뿐 세션 상태를 복제하지 않는다. rollout·eviction·drain·scale-down이 전부 여기 걸린다 — **배포할 때마다 진행 중인 세션이 끊긴다.**
   - **결정 — 1C의 트레이드오프는 존재하지 않는다.** "affinity를 고르면 rate limit이 부수적으로 해결된다"가 전제였는데 affinity가 선택지가 아니다. rate limit(§3)은 세션 전략과 무관하게 **독립 문제**로 내려간다. 2주차가 결론낼 결정은 둘이 아니라 하나다 — **T9의 "두 결정" 구조를 이에 맞춰 다시 볼 것.**
   - **부수 실측 — audit 쪼개짐 재확인.** stateless 6회(도구 호출 18건)가 3파드에 **6/6/6**. T1의 6/7/5와 같은 현상이다.
-- [ ] **T6 (P1, CC ~15분)** — ticket-server `replicas: 3` 조용한 소실 재현
+- [x] **T6 (P1, CC ~15분)** — ticket-server `replicas: 3` 조용한 소실 재현 ✅ 2026-08-25
   - **Why (결정 2B):** `servers/ticket/src/ticket_server/db.py:35` 파드 로컬 SQLite. 게이트웨이 4문제는 전부 시끄럽게 깨지는데(핸드셰이크 실패, 즉시 거부, 목록 불일치) **이것만 에러 없이 빈 결과.** 결론은 "replicas 1 고정 + 근거" — circuit breaker의 "파드별이 의미적으로 옳다"와는 **종류가 다른** 미수정 결론.
   - Files: `k8s/base/ticket-server.yaml`, `docs/k8s-stateful-findings.md`
+  - **결과 — `replicas: 1` 고정 확정. 다만 위 Why의 "이것만 에러 없이 빈 결과"는 절반만 맞았다.** 지배적 증상은 조용한 소실이 아니라 **시끄러운 `BACKEND_UNAVAILABLE`**(왕복 15회 중 13회, 게이트웨이 3+stateless에선 9/9). 저장소가 갈라지는 걸 보기 전에 세션 계층이 먼저 부러진다 — §1의 MCP 세션 문제가 게이트웨이→백엔드 한 홉 안쪽에서 그대로 재현된 것.
+  - **조용한 소실 자체는 실재한다 — search-only 12회 중 2회가 `hits=0` + isError 없음.** 전체 핸드셰이크가 데이터 없는 파드에서 완결될 때만 나오는 소수 경로다. 저장소 증거: 스키마가 `CREATE TABLE IF NOT EXISTS` 자가 부트스트랩이라 **"테이블 없음"=그 파드에서 tool이 한 번도 안 돌았다**, **"테이블 있음+0행"=읽기가 거기서 돌고 빈손이었다**. 실측 스냅샷 `rows=26 / rows=0 / table 없음`.
+  - **stateless 토글은 이 홉을 덮지 않는다.** `GATEWAY_MCP_STATELESS`는 게이트웨이의 *서버* 쪽(클라이언트→게이트웨이)만 stateless로 만든다(`app.py:203-204`). 백엔드를 향해 여는 *클라이언트* 세션(`upstream.py`)은 그대로 stateful이라, §1-A가 택한 전략 B로 게이트웨이를 3개로 늘리면 실패가 **9/9로 악화**된다. → **T9에서 "전략 B는 백엔드 홉을 해결하지 않는다"를 명시할 것.**
+  - **부수 실측 — `/ready`는 거짓말하지 않았다.** 실패 중 `{"ticket":false}`를 정확히 보고(T3 능동 probe). §1-A의 sessionAffinity가 `kubectl`에 멀쩡히 보이며 아무 일도 안 하던 것과 정반대 — 여기서 조용한 건 데이터지 헬스 신호가 아니다.
 - [ ] **T7 (P1, CC ~30분)** — `scripts/verify_scaleout.py` 증거 수집 스크립트 (결정 6A)
   - Verify: 한 줄 실행으로 rate limit 실효 한도 + ticket 소실 + 세션 전략 차이 출력 (`spike_concurrency.py` 패턴)
 - [ ] **T9 (P1, CC ~1시간)** — findings 문서를 "두 결정" 구조로 완성
