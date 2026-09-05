@@ -9,7 +9,7 @@
 
 ## A. 활성 트랙 — K8s stateful scale-out (2주)
 
-원본: `docs/context/2026-08-15-context-save.md` § Implementation Tasks. 착수 순서는 T2 → T3 → T4 → T1 → T5/T6 → T7 → T9 → T8/T10.
+원본: `docs/context/2026-08-15-context-save.md` § Implementation Tasks. 착수 순서는 T2 → T3 → T4 → T1 → T5/T6 → **T7 → T11 → T12 → T9 → T13 → T8/T10** (2026-09-05 재정렬 — T11·T12·T13은 계획 공백을 메우며 신설).
 
 ### 1주차 — 올리고, 깨뜨린다
 
@@ -72,9 +72,29 @@
   - **부수 실측 — `/ready`는 거짓말하지 않았다.** 실패 중 `{"ticket":false}`를 정확히 보고(T3 능동 probe). §1-A의 sessionAffinity가 `kubectl`에 멀쩡히 보이며 아무 일도 안 하던 것과 정반대 — 여기서 조용한 건 데이터지 헬스 신호가 아니다.
 - [ ] **T7 (P1, CC ~30분)** — `scripts/verify_scaleout.py` 증거 수집 스크립트 (결정 6A)
   - Verify: 한 줄 실행으로 rate limit 실효 한도 + ticket 소실 + 세션 전략 차이 출력 (`spike_concurrency.py` 패턴)
-- [ ] **T9 (P1, CC ~1시간)** — findings 문서를 "두 결정" 구조로 완성
+  - **범위 명확화 (2026-09-05):** T7은 **측정만** 한다. §3의 세 선택지(Redis / 한도를 레플리카 수로 나눔 / 게이트웨이 앞단 이동) 중 무엇을 택할지는 Open Question #3이고 **T9 §3이 소유한다** — 성공기준 #3은 "증명" 또는 "왜 그렇게 하지 않기로 했는지의 근거" 둘 다 허용한다. 계획에 이 소유권이 비어 있었다.
+- [ ] **T11 (P1, CC ~40분)** — audit 쪼개짐 결론 (§2, 성공기준 #4) 🆕 2026-09-05 신설
+  - **Why:** 설계 2주차 표의 네 항목(세션·audit·rate limit·circuit breaker) 중 **결론 태스크가 아예 없던** 항목. T5가 §1-A를, T6이 §5를 닫았으므로 여기가 남은 최대 구멍이다. Open Question #2가 08-14부터 열려 있다.
+  - **제약이 곧 서사다.** k3d local-path는 **RWO만** 준다 → 레플리카 3이 같은 PVC를 공유할 수 없다. 선택지: ① PVC(RWO) + 게이트웨이 `replicas: 1` 고정 ② StatefulSet + 파드별 파일 + `/admin`이 전 파드 조회 ③ 사이드카/DaemonSet 수집 후 외부 집계 ④ 안 고침 + 근거.
+  - **정정 — 해시 체인이 아니다.** `audit.py`는 append-only JSONL이고 해시 체인은 Evidence Box 축 설계다. 파드 분할이 깨는 것은 무결성이 아니라 **완결성**이다. `admin.py:49`가 파일 하나를 `read_text()`로 통째 읽으므로 수집기를 붙이면 `/admin`의 데이터 소스가 바뀐다 — 미승인 제안 2번과 같은 자리다.
+  - Files: `k8s/overlays/`(택한 안), `docs/k8s-stateful-findings.md` §2
+  - Verify: 성공기준 #4 — `/admin`이 레플리카 환경에서 전체 호출을 보여주거나, **못 보여주는 이유 + 택한 대안**이 명시됨
+- [ ] **T12 (P1, CC ~30분)** — circuit breaker 파드별 학습 실측 + 기각 근거 (§4) 🆕 2026-09-05 신설
+  - **Why:** 네 항목 중 **실측 태스크도 결론 태스크도 둘 다 없던** 항목. "파드별 유지 + 안 고침"이 답일 가능성이 높지만, 성공기준 #2가 요구하는 것은 결론이 아니라 **근거**고 근거에는 관측 증거가 필요하다. 증거 없는 "안 고침"은 그냥 미구현으로 읽힌다.
+  - **선행 확인:** `circuit.py`의 `from_env()`는 `GATEWAY_CIRCUIT_THRESHOLD` 미설정 시 `None`을 돌려 회로 차단을 **통째로 비활성화**한다(기본 비활성 opt-in). 매니페스트에 값이 없으면 재현 자체가 성립하지 않는다 — 먼저 확인할 것.
+  - Files: `docs/k8s-stateful-findings.md` §4
+  - Verify: 백엔드 1종을 죽였을 때 파드마다 `tools/list` 결과가 갈리는 것을 실측 + "파드가 자기 연결의 건강을 스스로 판단하는 것이 옳다"의 논증
+- [ ] **T9 (P1, CC ~1시간)** — findings 문서 완성 — **구조 재정의 2026-09-05**
   - **이것이 이 트랙의 진짜 wedge다.** 채용담당자는 yaml을 읽지 않는다.
-  - Verify: 성공기준 #2 — "고치지 않는다" 결론 2종(circuit breaker, ticket-server) 포함
+  - **"두 결정" 구조는 폐기한다.** T5가 그 전제(affinity를 고르면 rate limit이 부수 해결된다)를 실측으로 부정했다. 새 구조는 **결정 1 + 독립 문제 4**:
+    - **결정 1개** — 세션 전략 = B(stateless). 트레이드오프가 실제로 있었던 유일한 자리 (§1-A, T5)
+    - **독립 문제 4개** — audit(T11) / rate limit(T7 측정 → 여기서 결정) / circuit breaker(T12) / ticket-server(T6 완료)
+  - **반드시 들어갈 것:** ① "고치지 않는다" 결론 2종 = circuit breaker + ticket-server (성공기준 #2) ② "전략 B는 게이트웨이→백엔드 홉을 해결하지 않는다" (T6) ③ **조용한 실패 3종의 대비** — affinity(설정은 `kubectl`에 보이는데 무동작) / audit(HTTP 200인데 조각만) / ticket(에러 없는 빈 결과). 셋 다 "화면은 멀쩡한데 내용이 틀린" 종류다.
+  - Verify: 성공기준 #2
+- [ ] **T13 (P2, CC ~10분)** — README 진입점 (성공기준 #11) 🆕 2026-09-05 신설
+  - **Why:** "채용담당자 동선이 배포 채널"이 이 트랙 전체의 목적(설계 § Distribution Plan)인데 T1~T10 어디에도 태스크가 없었다. findings를 아무리 잘 써도 링크가 없으면 안 읽힌다.
+  - Files: `README.md`
+  - Verify: 최상단 "K8s에서 배운 것" 3줄 + `docs/k8s-stateful-findings.md` 링크
 - [ ] **T8 (P2, CC ~5분)** — `docs/architecture.md` 갱신 (201행 `/ready` 누락, 8장 폴더 지도에 `k8s/` 없음)
 - [ ] **T10 (P2, CC ~20분)** — 커버리지 갭 12건 중 코드 경로 7건 (현재 승인된 결정 기준 2/14)
 
