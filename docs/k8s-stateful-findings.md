@@ -3,9 +3,10 @@
 단일 노드 compose에서 잘 돌던 MCP Gateway를 3노드 k3d에 올리고 `replicas: 3`으로 밀었다.
 무엇이 깨졌고, 무엇을 고쳤고, **무엇을 고치지 않기로 했는지**의 기록.
 
-**한 줄 요약: 깨진 것은 네 가지였지만 트레이드오프가 있는 결정은 하나뿐이었다.** 나머지 셋은
-"이 환경에서는 이렇게 동작한다"를 알아내고 문서화하는 문제였고, 그중 둘은 **고치지 않는 쪽이
-옳았다** — 근거와 함께 아래에 적었다.
+**한 줄 요약: 다섯 군데가 깨졌는데 트레이드오프가 있는 결정은 하나뿐이었다.** 나머지 넷은
+"이 환경에서는 이렇게 동작한다"를 알아내는 문제였고, **넷 다 고치지 않기로 끝났다 — 서로 다른
+네 가지 이유로.** 아무것도 안 했다는 뜻이 아니다. 네 개의 "안 고침"에는 각각 다른 근거가 있고,
+그 근거를 만드는 것이 2주차 작업의 대부분이었다.
 
 증거는 한 명령으로 재생된다.
 
@@ -136,12 +137,19 @@ A는 독립된 두 이유로 기각된다. 인그레스 우회는 고칠 수 있
 해결하지 않는다. 다만 그 둘은 stateless가 **만든** 문제가 아니다 — affinity에서도 버킷과 파일은
 똑같이 파드 로컬이다. stateless는 숨을 곳을 없앴을 뿐이다.
 
+**그리고 이것이 B의 가장 중요한 한계다 — 전략 B는 게이트웨이→백엔드 홉을 해결하지 않는다.**
+`GATEWAY_MCP_STATELESS`는 게이트웨이의 *서버* 쪽(클라이언트→게이트웨이)만 stateless로 만든다
+(`app.py:203-204`). 게이트웨이가 백엔드를 향해 여는 *클라이언트* 세션(`upstream.py`)은 그대로
+stateful이다. 그래서 백엔드를 여러 개로 늘리면 §1과 **똑같은 파손이 한 홉 안쪽에서 재현되고**,
+게이트웨이를 3개로 늘리면 백엔드 세션도 3개가 되어 실패가 오히려 **9/9로 악화된다**(§5 실측).
+B는 "클라이언트가 어느 게이트웨이 파드에 닿아도 된다"만 산다. 백엔드 쪽 세션 문제는 그대로다.
+
 ### 1C 재정리 — 결정이 하나 줄었다
 
 원래 프레이밍은 "affinity를 고르면 rate limit이 부수적으로 해결되지만 3주차 KEDA가 자기모순이
 된다, stateless는 그 반대"였다. **그 트레이드오프는 존재하지 않는다.** affinity가 선택지가 아니므로
-rate limit은 세션 전략과 무관하게 **독립적으로** 풀어야 하는 문제다. 2주차가 결론낼 결정은 둘이
-아니라 하나고(세션 전략 = B 확정), 나머지는 개별 문제로 내려간다.
+rate limit은 세션 전략과 무관하게 **독립적으로** 풀어야 하는 문제다. 2주차가 결론낸 결정은 둘이
+아니라 하나고(세션 전략 = B 확정), 나머지는 개별 문제로 내려갔다 — 문서 맨 위의 요약표가 그 결과다.
 
 ## 2. audit 로그 — 파드마다 쪼개진다 ✅실측 + 결론 (T11)
 
@@ -159,6 +167,17 @@ gateway-...-vrqml : 5 줄
 
 깨지는 것은 **무결성이 아니라 완결성**이다. `audit.py`는 append-only JSONL이고 수정·삭제
 경로가 없다 — 어느 조각도 위조되지 않았다. 없는 것은 "전부를 한 번에 보는 시야"다.
+
+**재현.**
+
+```bash
+kubectl apply -k k8s/overlays/stateless        # 또는 k8s/overlays/audit-pvc
+# 파드가 '준비된 새 파드 정확히 3개'로 정착한 뒤(§9) e2e를 6회 — 호출 18건
+for p in $(kubectl get pods -l app=gateway -o name); do
+  kubectl exec "$p" -- sh -c 'wc -l < /app/audit/audit.jsonl'
+done
+curl -s "http://localhost:8080/admin?token=<ADMIN_TOKEN>" | grep -c '</tr>'
+```
 
 ### 선택지 ① PVC(RWO) — 완결성은 실제로 산다. 대가가 스케일아웃이다
 
@@ -268,8 +287,24 @@ K8s가 아니라 **audit이 파드 로컬 파일이라는 설계**이고, 이 �
 opt-in). `k8s/base/`에도 `docker-compose.yml`에도 이 값이 없다. **재현하려면 먼저 켜야 한다** —
 `kubectl set env deployment/gateway GATEWAY_CIRCUIT_THRESHOLD=2 GATEWAY_CIRCUIT_COOLDOWN=15`.
 
+**재현.** 인그레스로는 어느 파드가 답했는지 알 수 없으므로 파드에 직접 붙는다. `tools/list`는
+`is_tripped`만 읽고 `allow`/`record`를 부르지 않으므로 **관측이 상태를 바꾸지 않는다.**
+
+```bash
+kubectl set env deployment/gateway \
+  GATEWAY_CIRCUIT_THRESHOLD=2 GATEWAY_CIRCUIT_COOLDOWN=15 GATEWAY_MCP_STATELESS=1
+kubectl scale deployment/gateway --replicas=3
+kubectl scale deployment/ops-server --replicas=0   # 파드가 실제로 사라질 때까지 대기 (§9)
+
+kubectl port-forward pod/<gateway-pod-A> 18099:8000   # 이 파드에만 실패를 먹인다
+#   dev-agent 토큰으로 ops__get_metrics {"metric":"cpu"} ×3  → BACKEND_UNAVAILABLE ×3
+# 그 뒤 파드마다 port-forward해 tools/list의 ops 노출을 비교한다
+```
+
+`dev-agent`여야 한다 — `support-agent`는 정책(4단계)에서 먼저 걸려 회로(5단계)까지 못 간다.
+
 **측정.** 회로를 켜고 `replicas: 3` + stateless. `ops-server`를 죽이고, **파드 하나에만**
-실패를 먹인다(port-forward로 그 파드에 직접 호출). 나머지 둘은 아무 일도 겪지 않는다.
+실패를 먹인다. 나머지 둘은 아무 일도 겪지 않는다.
 
 | 단계 | 파드별 `tools/list`에 `ops`가 있나 |
 |---|---|

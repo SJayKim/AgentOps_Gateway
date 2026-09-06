@@ -401,6 +401,51 @@ T5 실측이 전제를 부정했다 — `sessionAffinity`가 선택지가 아니
 "기존 97 테스트 그린 유지"는 T1~T4가 12개를 더해 현재 **109**다(unit 75 + integration 34).
 기준의 취지(회귀 없음 + compose 무손상)는 그대로이므로 숫자만 여기 기록하고 본문은 두었다.
 
+## 2026-09-06 2주차 P1 종료 (T7·T11·T12·T9)
+
+2주차의 P1 구간이 끝났다. 상세는 `TODOS.md` § A와 `docs/k8s-stateful-findings.md`,
+여기에는 **설계 문서가 소유한 것**(Open Questions, 성공기준, 예측 대비 실측)만 적는다.
+
+### Open Questions 종료
+
+- **#2 (audit 공유 방식)** → **종료. 셋 다 아니다.** StatefulSet도 사이드카도 아니고 PVC도
+  아니다. PVC(RWO)는 완결성을 실제로 주지만(6/6/6 → 18/18/18) PV의 `nodeAffinity`가 세 파드를
+  한 노드에 못박는다 — 그 노드를 cordon하면 새 파드가 `didn't match PersistentVolume's node
+  affinity`로 Pending에 걸린다. **결론은 "안 고침 + 사실 명시"이고 택한 방향은 audit을
+  stdout으로 내보내 표준 로그 수집 경로에 태우는 것**(코드 변경 → 3주차). findings §2.
+- **#3 (rate limit: Redis vs 한도 나누기)** → **종료. 둘 다 아니다.** 실효 한도는 정확히
+  `설정값 × 레플리카 수`(5 → 15, ×3.0)로 측정됐다. Redis는 설계 제약(외부 의존성 없는 통제
+  환경)과 충돌하고, **한도 나누기는 3주차 KEDA가 레플리카 수를 동적으로 만드는 순간 분모가
+  클러스터 상태를 따라다녀야 하는 자기참조가 된다.** 결론은 "고치지 않고 `N`은 파드당 한도라는
+  계약을 명시"다. 성공기준 #3이 허용한 "근거" 경로. findings §3.
+
+### 설계 ⑤(local-path `sharedFileSystemPath`) — 30분 검증 완료, 탈출구 아님
+
+설계는 "k3d는 노드가 전부 같은 Docker 호스트의 컨테이너라 모든 노드에 같은 경로를 마운트하는
+조건을 만들 수 있다"고 봤다. **틀렸다.** 세 노드는 `/var/lib/rancher/k3s`에 각자 다른 Docker
+볼륨을 갖는다(공유되는 것은 이미지 볼륨뿐). 켜면 RWX **선언**만 얻고 PV의 노드 고정이 풀려
+파드가 흩어지며 audit은 조용히 다시 쪼개진다. 설계가 경고한 "거짓 통과"보다 나쁜 모양이라
+**켜지 않았다.**
+
+### 성공기준 진행
+
+- **#2 (네 문제 각각 재현·증거·결론)** — 충족. 네 문제 전부 결론이 났고, **넷 다 "고치지
+  않는다"** 로 끝났다(서로 다른 네 가지 근거). 최소 1개 요구를 초과 충족.
+- **#3 (rate limit)** — "근거" 경로로 충족. findings §3.
+- **#4 (`/admin` 전체 호출)** — "못 보여주는 이유 + 택한 대안" 경로로 충족. findings §2.
+- **#7 (회로 open을 Grafana에서 관측)** — **선행 조건이 드러났다.** 매니페스트에
+  `GATEWAY_CIRCUIT_THRESHOLD`가 없어 클러스터에서 회로는 통째로 비활성이다. 기본 비활성은
+  stretch의 의도된 설계라 `k8s/base/`는 그대로 뒀다 — 켜는 것은 env 한 줄이고, 언제 켤지는
+  3주차 관측 스택의 결정이다.
+- **#11 (README 진입점)** — 미착수(T13, P2).
+
+### 신규 findings §9 — K8s의 "완료"는 컨트롤러의 장부다
+
+`kubectl rollout status`가 성공을 반환한 뒤에도 옛 파드는 graceful termination 동안 요청을
+받는다(ReplicaSet이 `deletionTimestamp` 찍힌 파드를 active에서 제외하기 때문). 이 함정에 한
+세션에 **두 번** 걸렸다 — 두 번째는 `replicas: 0`이라 기다릴 새 파드가 없어 특히 조용했다.
+`sessionAffinity`가 `kubectl`에 보이면서 무동작이던 것과 같은 종류의 거리다.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
