@@ -70,9 +70,15 @@
   - **조용한 소실 자체는 실재한다 — search-only 12회 중 2회가 `hits=0` + isError 없음.** 전체 핸드셰이크가 데이터 없는 파드에서 완결될 때만 나오는 소수 경로다. 저장소 증거: 스키마가 `CREATE TABLE IF NOT EXISTS` 자가 부트스트랩이라 **"테이블 없음"=그 파드에서 tool이 한 번도 안 돌았다**, **"테이블 있음+0행"=읽기가 거기서 돌고 빈손이었다**. 실측 스냅샷 `rows=26 / rows=0 / table 없음`.
   - **stateless 토글은 이 홉을 덮지 않는다.** `GATEWAY_MCP_STATELESS`는 게이트웨이의 *서버* 쪽(클라이언트→게이트웨이)만 stateless로 만든다(`app.py:203-204`). 백엔드를 향해 여는 *클라이언트* 세션(`upstream.py`)은 그대로 stateful이라, §1-A가 택한 전략 B로 게이트웨이를 3개로 늘리면 실패가 **9/9로 악화**된다. → **T9에서 "전략 B는 백엔드 홉을 해결하지 않는다"를 명시할 것.**
   - **부수 실측 — `/ready`는 거짓말하지 않았다.** 실패 중 `{"ticket":false}`를 정확히 보고(T3 능동 probe). §1-A의 sessionAffinity가 `kubectl`에 멀쩡히 보이며 아무 일도 안 하던 것과 정반대 — 여기서 조용한 건 데이터지 헬스 신호가 아니다.
-- [ ] **T7 (P1, CC ~30분)** — `scripts/verify_scaleout.py` 증거 수집 스크립트 (결정 6A)
+- [x] **T7 (P1, CC ~30분)** — `scripts/verify_scaleout.py` 증거 수집 스크립트 (결정 6A) ✅ 2026-09-06
   - Verify: 한 줄 실행으로 rate limit 실효 한도 + ticket 소실 + 세션 전략 차이 출력 (`spike_concurrency.py` 패턴)
   - **범위 명확화 (2026-09-05):** T7은 **측정만** 한다. §3의 세 선택지(Redis / 한도를 레플리카 수로 나눔 / 게이트웨이 앞단 이동) 중 무엇을 택할지는 Open Question #3이고 **T9 §3이 소유한다** — 성공기준 #3은 "증명" 또는 "왜 그렇게 하지 않기로 했는지의 근거" 둘 다 허용한다. 계획에 이 소유권이 비어 있었다.
+  - **결과 — 세 증거가 한 명령에서 나온다.** 스크립트가 replicas·env를 직접 조작하고 finally에서 기준선으로 되돌린다(매니페스트는 안 건드림).
+    - **§3 rate limit: 실효 한도 5 → 15, 정확히 ×3.0.** `GATEWAY_RATE_LIMIT=5 GATEWAY_RATE_REFILL=0`에서 30회 중 통과 수가 곧 실효 한도다. 레플리카 수만큼 배증한다는 가설이 숫자로 확정됐다.
+    - **§5 ticket: HIT=1 / SILENT_MISS=2 / LOUD=9**(전부 `BACKEND_UNAVAILABLE`), 파드별 저장소 `rows=2 / 0 / 0`. T6의 4/2/6과 같은 그림 — SILENT_MISS는 12회 중 2회로 재현됐다.
+    - **§1-A 세션: stateful 0/6, stateless 6/6.** T5 수치가 그대로 재현된다.
+  - **실측으로 배운 것 — `kubectl rollout status`는 "옛 파드가 요청을 그만 받는 시점"이 아니다.** 첫 실행이 `replicas: 1`에서 `McpError: Session terminated`로 죽었다. ReplicaSet이 active 파드를 셀 때 `deletionTimestamp`가 찍힌 파드를 빼기 때문에, **옛 파드가 삭제 표시되는 순간 rollout이 완료로 보고된다** — 그런데 그 파드는 graceful termination 동안 계속 서빙하고 traefik의 EndpointSlice 반영도 즉시가 아니다. 그래서 세션이 죽어가는 파드에 붙었다. `settle()`(파드 목록이 준비된 새 파드 정확히 N개로 정착할 때까지 대기)을 얹어 해결. **findings §9로 기록.**
+  - **부수 — 출력 인코딩.** Windows 콘솔·파이프 기본이 cp949라 `—` 하나에 리포트가 통째로 죽는다. `sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)`로 고정(라인 버퍼링은 롤아웃 대기가 길어 섹션이 끝나는 대로 보이게).
 - [ ] **T11 (P1, CC ~40분)** — audit 쪼개짐 결론 (§2, 성공기준 #4) 🆕 2026-09-05 신설
   - **Why:** 설계 2주차 표의 네 항목(세션·audit·rate limit·circuit breaker) 중 **결론 태스크가 아예 없던** 항목. T5가 §1-A를, T6이 §5를 닫았으므로 여기가 남은 최대 구멍이다. Open Question #2가 08-14부터 열려 있다.
   - **제약이 곧 서사다.** k3d local-path는 **RWO만** 준다 → 레플리카 3이 같은 PVC를 공유할 수 없다. 선택지: ① PVC(RWO) + 게이트웨이 `replicas: 1` 고정 ② StatefulSet + 파드별 파일 + `/admin`이 전 파드 조회 ③ 사이드카/DaemonSet 수집 후 외부 집계 ④ 안 고침 + 근거.
