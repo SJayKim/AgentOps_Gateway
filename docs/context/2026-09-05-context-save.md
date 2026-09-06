@@ -1,27 +1,32 @@
 ---
-status: handoff
+status: current
 branch: main
-timestamp: 2026-09-05T17:00:00+09:00
+timestamp: 2026-09-06T00:00:00+09:00
+covers: 2026-09-05 (계획 공백 + 환경 재구축) → 2026-09-06 (2주차 P1 종료)
 files_modified:
-  - TODOS.md (T11·T12·T13 신설 + T7 범위 명확화 + T9 구조 재정의 + 착수 순서 재정렬)
-  - docs/design/k8s-stateful-scale-out.md (§2026-09-05 계획 공백 보완 추가)
-  - docs/context/2026-09-05-context-save.md (본 문서)
+  - scripts/verify_scaleout.py (신규 — T7)
+  - k8s/overlays/audit-pvc/ (신규 3파일 — T11, 기각된 안의 박제)
+  - docs/k8s-stateful-findings.md (§2·§3·§4 결론 + §9 + 요약표 + 조용한 실패 4종 — T9)
+  - docs/design/k8s-stateful-scale-out.md (§2026-09-05 계획 공백 보완, §2026-09-06 2주차 P1 종료)
+  - TODOS.md (T7·T11·T12·T9 완료 반영)
+  - docs/context/2026-09-05-context-save.md (본 문서 — current status로 갱신)
   - certs/windows-roots.crt (git 미추적 — 머신 로컬 재생성분)
 ---
 
-## Working on: 계획 공백 4건 보완 + K8s 환경 재구축 — T7 착수 직전에서 중단
+## Current Status: 2주차 P1 종료 (T7·T11·T12·T9 완료) — 남은 것은 P2 3건
 
 ### Summary
 
-08-25(T6) 이후 11일 공백을 두고 재개했다. 두 가지를 했다.
+두 세션을 이어 붙인 문서다. **§1·§2는 09-05 세션의 기록**(환경 재구축 절차는 머신이 바뀌면
+다시 필요하므로 그대로 보존), **§3부터가 현재 상태**다.
 
-1. **계획의 빈 곳을 메웠다.** 남은 구간을 점검하니 "어떻게 측정할지"는 다 있는데
-   **"무엇으로 결론낼지"가 세 항목에서 비어 있었다.** T11·T12·T13을 신설하고 T9의 구조를
-   다시 정의했다. 커밋 `efb1428`, 푸시 완료.
-2. **클러스터를 처음부터 다시 세웠다.** T1 때와 **다른 머신**이라 k3d도 CA 인증서도 없었다.
-   기준선까지 복구해 Ingress 경유 e2e **exit 0**을 다시 확인했다.
+**09-05 (계획):** 남은 구간을 점검하니 "어떻게 측정할지"는 다 있는데 **"무엇으로 결론낼지"가
+세 항목에서 비어 있었다.** T11·T12·T13을 신설하고 T9 구조를 재정의(`efb1428`). 클러스터는
+다른 머신이라 처음부터 다시 세웠다(`cda4074`).
 
-코드는 한 줄도 안 건드렸다. T7(`scripts/verify_scaleout.py`)은 설계 조사만 하고 미착수.
+**09-06 (실행):** **2주차 P1 4건을 전부 끝냈다.** T7(증거 수집 스크립트) → T11(audit 결론) →
+T12(circuit breaker 결론) → T9(findings 완성). 커밋 4건. **네 개의 독립 문제가 전부 "고치지
+않는다"로 끝났고 근거가 넷 다 다르다** — 그게 이 트랙의 산출물이다.
 
 ---
 
@@ -148,67 +153,89 @@ GATEWAY_URL=http://localhost:8080/mcp GATEWAY_JWT_SECRET=demo-secret-do-not-use-
 
 ---
 
-## 3. 현재 상태
+## 3. 2026-09-06 진행분 — 2주차 P1 4건 (T7 → T11 → T12 → T9)
 
-- **git:** `main`, working tree clean, `efb1428` 푸시 완료. origin과 동기.
-- **테스트:** `tests/unit` 75 passed (이번 세션 실측). 전체 109(unit 75 + integration 34)는
-  코드 미변경이라 유지로 본다.
-- **클러스터:** 살아 있다. 6서비스 전부 `1/1 Running`, 3노드 분산, 전 Deployment
-  `replicas: 1`(기준선), stateless 토글 미설정.
-  - 세션을 새로 시작하면 `kubectl get nodes`부터 확인하고, 실패하면 위 ④를 적용할 것.
+### T7 — `scripts/verify_scaleout.py` (`786ef7a`)
+
+한 명령으로 증거 3종. 스크립트가 replicas·env를 직접 조작하고 **finally에서 기준선으로
+되돌린다**(매니페스트는 안 건드림).
+
+| 측정 | 결과 |
+|---|---|
+| §3 rate limit 실효 한도 | `replicas 1` → **5**, `replicas 3 + stateless` → **15 (×3.0)** |
+| §5 ticket 소실 | `HIT=1 / SILENT_MISS=2 / LOUD=9`, 파드 저장소 `rows=2/0/0` |
+| §1-A 세션 전략 | stateful **0/6**, stateless **6/6** (T5 재현) |
+
+### T11 — audit 결론 (`d58d548`)
+
+**PVC(RWO)는 완결성을 실제로 준다.** 같은 부하(18건)에서 파드 로컬 `6/6/6` → PVC `18/18/18`,
+`/admin` 6건 → 18건, 세 파드 동시 append에도 **찢긴 줄 0**.
+
+**대가가 스케일아웃 자체다.** PVC를 붙이면 세 파드가 전부 한 노드에 뜬다. 강제다 — 그 노드를
+cordon하고 파드를 지우면 `0/3 nodes are available: ... 2 node(s) didn't match PersistentVolume's
+node affinity`로 Pending. 설계 ⑤(`sharedFileSystemPath`)도 닫혔다: 세 노드가
+`/var/lib/rancher/k3s`에 **각자 다른 Docker 볼륨**을 갖는다.
+→ **안 고침.** 택한 방향은 audit을 stdout으로 내보내 표준 로그 수집에 태우기(3주차).
+
+### T12 — circuit breaker 결론 (`22c5ed2`)
+
+선행 확인에서 먼저 걸렸다 — 매니페스트에 `GATEWAY_CIRCUIT_THRESHOLD`가 없어 **회로가 켜져
+있지도 않았다.** 켜고 한 파드에만 실패를 먹이니 `없음/있음/있음`으로 갈렸고, 같은 클라이언트가
+인그레스로 12번 물으면 **ops 보임 8 / 안 보임 4**. 복구는 그 파드만 스스로 했다.
+→ **안 고침.** 회로가 지키는 것은 백엔드가 아니라 **그 파드의 연결**이다.
+
+### T9 — findings 완성 (`c053359`)
+
+계획 대비 둘이 커졌다: **"안 고침"이 2종 → 4종**(audit·rate limit도), **조용한 실패가 3종 →
+4종**(§9 추가). §번호는 재번호하지 않고 **맨 위 요약표**로 "결정 1 + 독립 문제 4"를 전달한다 —
+세 문서가 §번호를 인용하고 있어 D6의 문서 불일치를 다시 만들지 않기 위해서.
+
+### 이번 세션의 새 함정 — findings §9
+
+**`kubectl rollout status`는 "옛 파드가 요청을 그만 받는 시점"이 아니다.** ReplicaSet이
+`deletionTimestamp` 찍힌 파드를 active에서 빼므로 삭제 표시 순간 완료로 보고되고, 그 파드는
+graceful termination 동안 계속 서빙한다. **한 세션에 두 번 걸렸다** — T7에서는 `replicas: 1`인데
+`Session terminated`, T12에서는 `replicas: 0`으로 줄인 백엔드가 `OK`를 반환. `replicas: 0`은
+기다릴 새 파드가 없어 특히 조용하다. 해결은 `verify_scaleout.py`의 `settle()`.
+
+---
+
+## 4. 현재 상태
+
+- **git:** `main`, working tree clean. 09-06 커밋 4건(`786ef7a` `d58d548` `22c5ed2` `c053359`).
+- **검증:** Ingress 경유 e2e **exit 0**, **109 passed**(unit 75 + integration 34), ruff 통과,
+  kustomize 4종 빌드(base + stateless + session-affinity + audit-pvc).
+- **클러스터:** 살아 있다. 6서비스 전부 `1/1 Running`, 3노드 분산. **기준선 복귀 확인 완료** —
+  전 Deployment `replicas: 1`, 토글 3종 없음, PVC 없음, cordon 흔적 없음.
+  - 세션을 새로 시작하면 `kubectl get nodes`부터 확인하고, 실패하면 위 ②④를 적용할 것.
   - 클러스터를 지우려면 `k3d cluster delete agentops`.
+- **2주차 P1은 전부 끝났다.** 남은 것은 P2 3건.
 
 ---
 
-## 4. 다음 작업 — T7부터
+## 5. 다음 작업 — P2 3건 + 상시
 
-### T7 착수 메모 (이번 세션 조사분, 코드 미작성)
-
-`scripts/verify_scaleout.py` — 한 줄 실행으로 세 증거를 뽑는다(결정 6A).
-`spike_concurrency.py`가 패턴 참고용이다.
-
-**rate limit 측정 설계 — `GATEWAY_RATE_REFILL=0`이 핵심.**
-`ratelimit.py:43`의 refill 기본값이 `capacity`(초당 통이 가득 참)라 그대로 두면 실효 한도를
-셀 수 없다. `GATEWAY_RATE_REFILL=0`을 주면 토큰이 회복되지 않아 **"거부 전까지 몇 번
-통과했나"가 곧 실효 한도**가 된다.
-
-```
-GATEWAY_RATE_LIMIT=5, GATEWAY_RATE_REFILL=0
-  replicas 1 → 5회 통과 후 RATE_LIMITED 예상
-  replicas 3 → 15회 (= 5 × 3) 예상 ← 이 배수가 §3의 증거
-```
-
-- 파싱: `capacity = int(cap)` (미승인 제안 1번 — 값 검증 없음). 정수만 줄 것.
-- 거부 형태: HTTP 429가 아니라 **MCP `CallToolResult(isError=True)` + `{"code":"RATE_LIMITED"}`**
-  (`errors.py`의 `error_result`). `content[0].text`를 JSON 파싱해 판정한다.
-- 버킷 키는 IP가 아니라 **agent**(`allow(self, agent)`)다. 클라이언트를 나눠도 소용없고,
-  파드가 나뉘어야 배증한다.
-- `route_call` 0단계라 tool 해석·정책보다 **먼저** 걸린다 — 어떤 tool로 재도 무방.
-- replicas 3에서 요청이 실제로 흩어지려면 `GATEWAY_MCP_STATELESS=1`이 필요하다(T5 결론).
-  안 그러면 rate limit이 아니라 세션이 먼저 깨진다.
-
-**ticket 소실 / 세션 전략 차이**는 T6·T5의 측정을 스크립트로 옮기는 것이다. 절차와 판정
-기준(HIT / SILENT_MISS / LOUD, "테이블 유무"로 파드 상태 판정)은
-`docs/k8s-stateful-findings.md` §5에 그대로 있다.
-
-**끝나면 클러스터를 기준선으로 되돌릴 것** — T5·T6도 그렇게 했다
-(`replicas: 1`, 토글 미설정, 매니페스트 파일은 안 건드림).
-
-### 그다음
-
-- **T11** audit 결론 (§2, 성공기준 #4) — local-path가 RWO만 준다는 제약이 곧 서사
-- **T12** circuit breaker 실측 + 기각 근거 (§4) — `GATEWAY_CIRCUIT_THRESHOLD` 미설정이면
-  회로가 통째로 비활성이라 재현이 성립하지 않는다. **먼저 확인할 것.**
-- **T9** findings 완성 (결정 1 + 독립 문제 4 구조)
-- **T13** README 진입점 / **T8** architecture.md / **T10** 커버리지
+- **T13 (P2, ~10분)** README 최상단 "K8s에서 배운 것" 3줄 + findings 링크 (성공기준 #11).
+  **이게 남은 것 중 값어치가 제일 크다** — findings를 아무리 잘 써도 진입점이 없으면 안 읽힌다.
+- **T8 (P2, ~5분)** `docs/architecture.md` — 201행 `/ready` 누락, 8장 폴더 지도에 `k8s/` 없음.
+- **T10 (P2, ~20분)** 커버리지 갭 12건 중 코드 경로 7건.
+- **C 트랙 JD 5건 수집 — 여전히 0건.** D5(3~4주차 착수 여부)가 여기 묶여 있다. 한 시간이면
+  2주짜리 결정을 검증한다. **P2보다 이게 먼저일 수 있다.**
 
 ---
 
-## 5. 미결·주의
+## 6. 미결·주의
 
-- **D5 재결정이 여전히 막혀 있다.** 3~4주차 착수 여부의 판단 근거가 "JD 5건"인데 수집은
-  **0건**이다. C 트랙 최우선 항목이고, 한 시간이면 2주짜리 결정을 검증한다.
+- **CLAUDE.md Gotcha 2줄 제안 — 미승인.** ① `rollout status` 함정(위 §3, 한 세션에 두 번 걸림)
+  ② 스크립트 출력에 `sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)` 고정
+  (Windows cp949가 `—` 하나에 죽고, 파이프는 블록 버퍼라 진행이 안 보인다). CLAUDE.md가
+  "제안 후 승인 대기"를 요구해 쓰지 않았다.
+- **§2·§3의 "안 고침"은 증거 기반 판단이고 뒤집을 수 있다.** audit은 "stdout → 로그 수집",
+  rate limit은 "`N`은 파드당 한도라는 계약 명시"로 적었다. 근거는 findings에 전부 있다.
+- **성공기준 #7은 선행 조건이 있다.** `GATEWAY_CIRCUIT_THRESHOLD`가 매니페스트에 없어 회로가
+  비활성이다. 기본 비활성은 stretch의 의도된 설계라 `k8s/base/`는 그대로 뒀다 — 켤지는 3주차 결정.
+- **D5 재결정이 여전히 막혀 있다.** 판단 근거가 "JD 5건"인데 수집은 **0건**.
 - **Evidence Box(A 트랙)는 PARKED 그대로.** 잠금 해제 조건(2차 대화 일정)에 변동 없음.
 - **성공기준 #10의 "97 테스트"는 현재 109다.** 취지(회귀 없음)는 유효해서 숫자만 설계
   문서에 기록하고 본문은 두었다.
-- **gstack 업그레이드 가능:** 1.64.0.0 → 1.79.0.0. 이번 세션에서는 안 했다.
+- **gstack 업그레이드 가능:** 1.64.0.0 → 1.79.0.0. 두 세션 다 안 했다.
