@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: gateway
+          env:
+            # 세션 전략 B가 확정이므로(§1-A) 레플리카 실험은 전부 이 토글 위에서 한다.
+            - name: GATEWAY_MCP_STATELESS
+              value: "1"
+          volumeMounts:
+            # GATEWAY_AUDIT_PATH가 /app/audit/audit.jsonl이다(base). 디렉터리를 볼륨으로 덮는다.
+            - name: audit
+              mountPath: /app/audit
+      volumes:
+        - name: audit
+          persistentVolumeClaim:
+            claimName: gateway-audit

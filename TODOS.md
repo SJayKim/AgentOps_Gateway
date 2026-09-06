@@ -79,12 +79,19 @@
     - **§1-A 세션: stateful 0/6, stateless 6/6.** T5 수치가 그대로 재현된다.
   - **실측으로 배운 것 — `kubectl rollout status`는 "옛 파드가 요청을 그만 받는 시점"이 아니다.** 첫 실행이 `replicas: 1`에서 `McpError: Session terminated`로 죽었다. ReplicaSet이 active 파드를 셀 때 `deletionTimestamp`가 찍힌 파드를 빼기 때문에, **옛 파드가 삭제 표시되는 순간 rollout이 완료로 보고된다** — 그런데 그 파드는 graceful termination 동안 계속 서빙하고 traefik의 EndpointSlice 반영도 즉시가 아니다. 그래서 세션이 죽어가는 파드에 붙었다. `settle()`(파드 목록이 준비된 새 파드 정확히 N개로 정착할 때까지 대기)을 얹어 해결. **findings §9로 기록.**
   - **부수 — 출력 인코딩.** Windows 콘솔·파이프 기본이 cp949라 `—` 하나에 리포트가 통째로 죽는다. `sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)`로 고정(라인 버퍼링은 롤아웃 대기가 길어 섹션이 끝나는 대로 보이게).
-- [ ] **T11 (P1, CC ~40분)** — audit 쪼개짐 결론 (§2, 성공기준 #4) 🆕 2026-09-05 신설
+- [x] **T11 (P1, CC ~40분)** — audit 쪼개짐 결론 (§2, 성공기준 #4) ✅ 2026-09-06
   - **Why:** 설계 2주차 표의 네 항목(세션·audit·rate limit·circuit breaker) 중 **결론 태스크가 아예 없던** 항목. T5가 §1-A를, T6이 §5를 닫았으므로 여기가 남은 최대 구멍이다. Open Question #2가 08-14부터 열려 있다.
   - **제약이 곧 서사다.** k3d local-path는 **RWO만** 준다 → 레플리카 3이 같은 PVC를 공유할 수 없다. 선택지: ① PVC(RWO) + 게이트웨이 `replicas: 1` 고정 ② StatefulSet + 파드별 파일 + `/admin`이 전 파드 조회 ③ 사이드카/DaemonSet 수집 후 외부 집계 ④ 안 고침 + 근거.
   - **정정 — 해시 체인이 아니다.** `audit.py`는 append-only JSONL이고 해시 체인은 Evidence Box 축 설계다. 파드 분할이 깨는 것은 무결성이 아니라 **완결성**이다. `admin.py:49`가 파일 하나를 `read_text()`로 통째 읽으므로 수집기를 붙이면 `/admin`의 데이터 소스가 바뀐다 — 미승인 제안 2번과 같은 자리다.
   - Files: `k8s/overlays/`(택한 안), `docs/k8s-stateful-findings.md` §2
   - Verify: 성공기준 #4 — `/admin`이 레플리카 환경에서 전체 호출을 보여주거나, **못 보여주는 이유 + 택한 대안**이 명시됨
+  - **결과 — ① PVC(RWO) 기각. 안 고치고, 진짜 해결 방향을 명시한다.** 오버레이 `k8s/overlays/audit-pvc/`로 박제(affinity와 같은 취급 — 기각된 안도 증거다).
+    - **PVC는 완결성을 실제로 준다.** 같은 부하(e2e 6회 = 18건)에서 파드 로컬은 `6/6/6`, PVC는 `18/18/18`. `/admin`도 6건 → 18건. 세 파드가 한 파일에 동시 append했는데 **전 줄이 유효 JSON, 찢긴 줄 0** — 작은 `O_APPEND` 쓰기가 원자적이라는 게 실측으로 확인됐다.
+    - **그런데 대가가 스케일아웃 그 자체다.** PVC를 붙이는 순간 세 파드가 **전부 같은 노드**(`agent-1`)에 떴다. 우연이 아니라 강제다 — 그 노드를 cordon하고 파드를 하나 지우니 새 파드가 **Pending**에 걸렸다: `0/3 nodes are available: 1 node(s) were unschedulable, 2 node(s) didn't match PersistentVolume's node affinity`. 노드 장애 내성을 얻으려고 레플리카를 늘리는데, 레플리카를 한 노드에 묶어 그 내성을 없앤다.
+    - **설계 ⑤(local-path `sharedFileSystemPath`) 탈출구도 닫혔다 — 30분 검증 완료.** 설계는 "k3d는 노드가 전부 같은 Docker 호스트라 조건을 만들 수 있다"고 봤지만 실측은 반대다: 세 노드가 `/var/lib/rancher/k3s`에 **각자 다른 Docker 볼륨**을 갖는다(`e2df089…` / `a331e185…` / `deddc080…`, 공유되는 건 이미지 볼륨뿐). agent-1에 파일을 만들면 agent-0에는 디렉터리조차 없다. 이 옵션을 켜면 RWX **선언**만 얻고 PV의 노드 고정이 풀려 파드가 흩어지며, audit은 **조용히 다시 쪼개진다** — "거짓 통과"가 설계가 예상한 방향보다 나쁘다.
+    - **② StatefulSet + `/admin` 팬아웃도 기각.** `/admin`의 데이터 소스를 바꾸는 코드 변경이고(미승인 제안 2번), 죽은 파드의 조각은 영영 못 읽으므로 완결성을 주는 게 아니라 조각을 모으는 시늉이다.
+    - **PVC는 잠자던 위험을 깨우기까지 한다.** `admin.py:49`가 매 요청 파일 전체를 `read_text()`하는데, 파드 로컬 파일은 파드와 함께 사라져 이 문제가 안 드러났다. PVC를 붙이면 파일이 무한히 자라고 로테이션이 없다(미승인 제안 2번이 실제 위험이 되는 조건).
+    - **택한 대안 — audit을 파일이 아니라 stdout(JSONL)으로 내보내 K8s 표준 로그 수집 경로에 태운다.** 공유 볼륨도 팬아웃도 필요 없고 파드가 죽어도 이미 나간 줄은 남는다. 코드 변경이므로 **3주차 관측 스택 구간(D5 보류)** 에 둔다. 2주차 결론은 "게이트웨이 `replicas: 3`에서 `/admin`은 자기 파드 조각만 보여준다"를 **명시**하는 것이다.
 - [ ] **T12 (P1, CC ~30분)** — circuit breaker 파드별 학습 실측 + 기각 근거 (§4) 🆕 2026-09-05 신설
   - **Why:** 네 항목 중 **실측 태스크도 결론 태스크도 둘 다 없던** 항목. "파드별 유지 + 안 고침"이 답일 가능성이 높지만, 성공기준 #2가 요구하는 것은 결론이 아니라 **근거**고 근거에는 관측 증거가 필요하다. 증거 없는 "안 고침"은 그냥 미구현으로 읽힌다.
   - **선행 확인:** `circuit.py`의 `from_env()`는 `GATEWAY_CIRCUIT_THRESHOLD` 미설정 시 `None`을 돌려 회로 차단을 **통째로 비활성화**한다(기본 비활성 opt-in). 매니페스트에 값이 없으면 재현 자체가 성립하지 않는다 — 먼저 확인할 것.

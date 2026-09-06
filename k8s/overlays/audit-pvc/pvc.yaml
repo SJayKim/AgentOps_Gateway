@@ -1,0 +1,12 @@
+# audit JSONL을 파드 밖 볼륨에 둔다. k3d 기본 StorageClass는 local-path이고
+# accessModes는 RWO뿐이다 — 이 한 줄이 §2의 제약 전부다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gateway-audit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
