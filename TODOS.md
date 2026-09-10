@@ -115,12 +115,33 @@
     - ③ 3종이 아니라 **4종**. §9(rollout status가 완료라는데 옛 파드가 서빙 중)가 같은 종류라 표에 넣었다. 공통점을 한 줄로 뽑았다 — 넷 다 "설정이 접수됐다"까지만 말하고 "그래서 그렇게 동작한다"는 말하지 않는다. **반례로 `/ready`를 세웠다**: 상태를 묻는 대신 `send_ping()`으로 왕복을 시켰기 때문에 거짓말하지 않았다.
   - **구조 결정 — §번호는 재번호하지 않았다.** TODOS·설계 문서·커밋 메시지가 전부 §1~§8을 인용한다. "결정 1 + 독립 문제 4" 구조는 **문서 맨 위 요약표**가 기존 번호로 매핑해 전달한다. D6에서 겪은 "문서 세 곳이 서로 다름"을 다시 만들지 않기 위해서다.
   - 재현 절차를 §2·§4에도 명시적으로 넣었다(§1-A·§3·§5는 `verify_scaleout.py`가 담당) — 성공기준 #2가 네 문제 각각에 재현 절차를 요구한다.
-- [ ] **T13 (P2, CC ~10분)** — README 진입점 (성공기준 #11) 🆕 2026-09-05 신설
+- [x] **T13 (P2, CC ~10분)** — README 진입점 (성공기준 #11) ✅ 2026-09-10
   - **Why:** "채용담당자 동선이 배포 채널"이 이 트랙 전체의 목적(설계 § Distribution Plan)인데 T1~T10 어디에도 태스크가 없었다. findings를 아무리 잘 써도 링크가 없으면 안 읽힌다.
   - Files: `README.md`
   - Verify: 최상단 "K8s에서 배운 것" 3줄 + `docs/k8s-stateful-findings.md` 링크
-- [ ] **T8 (P2, CC ~5분)** — `docs/architecture.md` 갱신 (201행 `/ready` 누락, 8장 폴더 지도에 `k8s/` 없음)
-- [ ] **T10 (P2, CC ~20분)** — 커버리지 갭 12건 중 코드 경로 7건 (현재 승인된 결정 기준 2/14)
+  - **결과 —** 제목 바로 아래·`## 아키텍처` 위에 `## K8s에서 배운 것 → findings 전문`. 세 줄이 findings 요약표의 세 축을 그대로 가리킨다 — ① 결정 1개 + "안 고침" 4종 ② 조용한 실패 4종 ③ 반례로서의 `/ready`.
+- [x] **T8 (P2, CC ~5분)** — `docs/architecture.md` 갱신 (201행 `/ready` 누락, 8장 폴더 지도에 `k8s/` 없음) ✅ 2026-09-10
+  - **결과 —** 5장 매핑표 `app.py` 행에 `/ready` 추가, 8장 폴더 지도에 `k8s/` 추가. 같은 지도의 테스트 수 `97 그린`도 **109**로 정정(실측 109 passed).
+- [x] **T10 (P2, CC ~20분)** — 커버리지 갭 12건 중 코드 경로 7건 (현재 승인된 결정 기준 2/14) ✅ 2026-09-10
+  - **결과 — 새 테스트 0줄. 갭 목록이 08-15 스냅샷이라 T2·T3·T4가 이미 전부 메웠다.** 코드 경로 **2/9 → 9/9**. 대조:
+
+    | 갭 (08-15 표) | 메운 테스트 |
+    |---|---|
+    | `build_app()` secret 없음 → 즉시 실패 | `unit/test_app_startup.py::test_build_app_requires_jwt_secret[None]` (T2) |
+    | *(표에 없던 것)* secret 빈 문자열 | 같은 테스트 `[]` 파라미터 — K8s Secret의 빈 값이 실제 위험이라 T2가 추가 |
+    | `/ready` 백엔드 ≥1 → 200 | `integration/test_ready.py::test_ready_stays_200_when_one_backend_dies` (T3) |
+    | `/ready` 백엔드 0 → 재연결 실패 → 503 | `test_ready_flips_to_503_when_all_backends_die_then_back_to_200` 전반부 |
+    | `/ready` 백엔드 0 → 재연결 성공 → 200 | 같은 테스트 후반부 |
+    | `/ready` 전멸 → 복구 → Ready 전환 (교착 회귀) | 같은 테스트 (이게 그 테스트의 존재 이유) |
+    | `/health` 테스트 0건 | `test_ready.py::test_health_stays_unconditional` |
+    | stateless 토글 `=1` 경로 | `integration/test_stateless.py::test_stateless_serves_full_e2e_without_session_id` (T4) |
+
+  - **테스트를 새로 쓰지 않은 이유:** 일곱 경로가 전부 이미 지나고 있다. 같은 경로를 덮는 테스트는 회귀 방어를 늘리지 않고 실행 시간만 늘린다. **T10이 남아 보였던 건 갭 목록이 T2·T3·T4보다 먼저 찍힌 스냅샷이기 때문이다** — 완료 태스크가 커버리지 표에 역류하지 않았다.
+  - **덤 — flows 갭의 마지막 미검증 1건도 실측했다 (Secret 오타 → CrashLoopBackOff).** 한 갈래가 아니라 둘이었다:
+    - **key 오타(`GATEWAY_JWT_SECRETT`) → `CreateContainerConfigError`.** 앱 코드에 도달조차 못 한다 — `kubelet: couldn't find key GATEWAY_JWT_SECRETT in Secret default/gateway-secrets`. 롤아웃은 `1 old replicas are pending termination`에서 멈추고 **옛 파드가 계속 서빙해 인그레스 e2e는 exit 0**. 시끄럽게 막히는데 사용자 영향은 0 — findings의 "조용한 실패 4종"과 정확히 반대편 사례다.
+    - **값이 빈 문자열 → `CrashLoopBackOff`**(60초에 재시작 3회). T2의 `RuntimeError`가 로그에 그대로 찍힌다. 여기서도 옛 파드가 살아 e2e exit 0 — `replicas: 1`이면 RollingUpdate가 새 파드 Ready 전엔 옛 파드를 안 지운다.
+    - **커버리지 최종: 코드 9/9 + flows 5/5 = 14/14** (08-15 기준 2/14).
+    - 클러스터 기준선 복귀 확인: pods 6/6 Running, 전 Deployment `replicas: 1`, Secret 원복, PVC 없음, `restartedAt` 잔재 없음, e2e exit 0.
 
 ### 2주차 말 재결정 (D5)
 

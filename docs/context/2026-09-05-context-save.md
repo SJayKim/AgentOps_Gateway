@@ -2,7 +2,7 @@
 status: current
 branch: main
 timestamp: 2026-09-06T00:00:00+09:00
-covers: 2026-09-05 (계획 공백 + 환경 재구축) → 2026-09-06 (2주차 P1 종료)
+covers: 2026-09-05 (계획 공백 + 환경 재구축) → 2026-09-06 (2주차 P1 종료) → 2026-09-10 (P2 종료 = 2주차 끝)
 files_modified:
   - scripts/verify_scaleout.py (신규 — T7)
   - k8s/overlays/audit-pvc/ (신규 3파일 — T11, 기각된 안의 박제)
@@ -10,10 +10,12 @@ files_modified:
   - docs/design/k8s-stateful-scale-out.md (§2026-09-05 계획 공백 보완, §2026-09-06 2주차 P1 종료)
   - TODOS.md (T7·T11·T12·T9 완료 반영)
   - docs/context/2026-09-05-context-save.md (본 문서 — current status로 갱신)
+  - README.md / docs/architecture.md (T13·T8)
+  - gateway·servers/*/Dockerfile, .dockerignore, .codex/hooks/protect_files.py (09-08 미커밋분 정리)
   - certs/windows-roots.crt (git 미추적 — 머신 로컬 재생성분)
 ---
 
-## Current Status: 2주차 P1 종료 (T7·T11·T12·T9 완료) — 남은 것은 P2 3건
+## Current Status: 2주차 종료 (T1~T13 전부 완료) — 다음은 D5 재결정
 
 ### Summary
 
@@ -200,42 +202,102 @@ graceful termination 동안 계속 서빙한다. **한 세션에 두 번 걸렸�
 
 ---
 
-## 4. 현재 상태
+## 4. 2026-09-10 진행분 — P2 3건 + 인계받은 미커밋 작업
 
-- **git:** `main`, working tree clean. 09-06 커밋 4건(`786ef7a` `d58d548` `22c5ed2` `c053359`).
-- **검증:** Ingress 경유 e2e **exit 0**, **109 passed**(unit 75 + integration 34), ruff 통과,
-  kustomize 4종 빌드(base + stateless + session-affinity + audit-pvc).
-- **클러스터:** 살아 있다. 6서비스 전부 `1/1 Running`, 3노드 분산. **기준선 복귀 확인 완료** —
-  전 Deployment `replicas: 1`, 토글 3종 없음, PVC 없음, cordon 흔적 없음.
-  - 세션을 새로 시작하면 `kubectl get nodes`부터 확인하고, 실패하면 위 ②④를 적용할 것.
-  - 클러스터를 지우려면 `k3d cluster delete agentops`.
-- **2주차 P1은 전부 끝났다.** 남은 것은 P2 3건.
+### 4-1. 커밋 안 된 6파일 (09-08 작업, 어느 문서에도 기록이 없었다)
+
+세션 시작 시 working tree에 Dockerfile 4종 + `.dockerignore` + `protect_files.py`가
+수정된 채 있었다. `.dockerignore` 주석이 **"감사 F02/F25"** 를 참조하는데 **그 감사
+보고서가 레포에 없다 — 출처 미상이고 나머지 지적사항도 모른다.**
+
+변경의 근거만 실측으로 확인하고 커밋했다(`5f52331`, `41322ed`). 같은 이미지에서
+CMD만 바꿔 `docker stop -t 10`:
+
+| | PID 1 | 소요 | exit | 로그 |
+|---|---|---|---|---|
+| shell form (기존) | `/bin/sh -c uv run --no-sync python -m $MODULE` | **10,640ms** | **137 (SIGKILL)** | shutdown 로그 **없음** |
+| exec form (변경) | `/app/.venv/bin/python -m ticket_server` | **935ms** | **0** | `Application shutdown complete` |
+
+기존 형태는 앱이 종료 사실 자체를 몰랐다. K8s 기본 `terminationGracePeriodSeconds: 30`
+이면 롤링 업데이트마다 파드당 30초를 기다리고 진행 중인 요청이 인사 없이 끊긴다 —
+**findings §9(옛 파드가 graceful termination 동안 계속 서빙한다)와 같은 구간의 문제다.**
+4종 전부 빌드·기동 확인(PID 1 = python).
+
+### 4-2. T13 (`08afa34`) · T8 (`5c1c894`)
+
+README 최상단에 `## K8s에서 배운 것 → findings 전문` 3줄. architecture.md는 `/ready`·
+`k8s/` 반영 + 테스트 수 `97 → 109` 정정.
+
+### 4-3. T10 — 새 테스트 0줄, 커버리지 2/14 → **14/14**
+
+**갭 목록(08-15 표)이 T2·T3·T4보다 먼저 찍힌 스냅샷이었다.** 코드 경로 7건은 그 세
+태스크가 이미 전부 메웠고(9/9), 같은 경로를 덮는 테스트를 새로 쓰는 것은 회귀 방어를
+늘리지 않는다. 대조표는 `TODOS.md` T10 항목.
+
+**덤으로 flows의 마지막 미검증 1건(Secret 오타 → CrashLoopBackOff)을 클러스터에서
+실측했다 — 한 갈래가 아니라 둘이었다.**
+
+- **key 오타 → `CreateContainerConfigError`.** 앱 코드에 도달조차 못 한다
+  (`kubelet: couldn't find key GATEWAY_JWT_SECRETT in Secret default/gateway-secrets`).
+  롤아웃은 `1 old replicas are pending termination`에서 멈추고 **옛 파드가 계속 서빙해
+  인그레스 e2e는 exit 0.** 시끄럽게 막히는데 사용자 영향은 0 — findings의 "조용한 실패
+  4종"과 정확히 반대편 사례다.
+- **값이 빈 문자열 → `CrashLoopBackOff`**(60초에 재시작 3회). T2의 `RuntimeError`가
+  로그에 그대로 찍힌다. 여기서도 옛 파드가 살아 e2e exit 0.
+
+### 4-4. 이번 세션의 환경 함정 — §2④가 그대로 재현됐다
+
+Docker Desktop이 꺼져 있었고, 켜니 k3d 컨테이너 4종은 자동 기동됐다(19일째 살아 있음).
+kubectl만 안 붙었다 — `host.docker.internal`이 이번엔 **192.168.200.208**로 풀렸다
+(09-05엔 10.207.111.24). **API 포트도 55164 → 52291로 바뀌어 있었다.** §2④ 절차 그대로
+`docker port k3d-agentops-serverlb`로 포트를 확인하고 kubeconfig를 루프백으로:
+
+```bash
+kubectl config set-cluster k3d-agentops --server=https://127.0.0.1:52291
+```
+
+**포트는 매번 바뀐다고 가정할 것.** 기록해둔 절차가 두 번째 세션에서 그대로 통했다.
 
 ---
 
-## 5. 다음 작업 — P2 3건 + 상시
+## 5. 현재 상태
 
-- **T13 (P2, ~10분)** README 최상단 "K8s에서 배운 것" 3줄 + findings 링크 (성공기준 #11).
-  **이게 남은 것 중 값어치가 제일 크다** — findings를 아무리 잘 써도 진입점이 없으면 안 읽힌다.
-- **T8 (P2, ~5분)** `docs/architecture.md` — 201행 `/ready` 누락, 8장 폴더 지도에 `k8s/` 없음.
-- **T10 (P2, ~20분)** 커버리지 갭 12건 중 코드 경로 7건.
-- **C 트랙 JD 5건 수집 — 여전히 0건.** D5(3~4주차 착수 여부)가 여기 묶여 있다. 한 시간이면
-  2주짜리 결정을 검증한다. **P2보다 이게 먼저일 수 있다.**
+- **git:** `main`, working tree clean. 09-10 커밋 5건
+  (`5f52331` `41322ed` `08afa34` `5c1c894` + TODOS 반영).
+- **검증:** **109 passed**(unit 75 + integration 34), ruff check·format 통과,
+  kustomize 4종 빌드, 인그레스 경유 e2e **exit 0**, 이미지 4종 빌드·기동.
+- **클러스터:** 살아 있다. 6서비스 전부 `1/1 Running`, 3노드. **기준선 복귀 확인 완료** —
+  전 Deployment `replicas: 1`, Secret 원복, PVC 없음, `restartedAt` 잔재 없음.
+  - 세션을 새로 시작하면 `kubectl get nodes`부터. 실패하면 §2④(포트 재확인 → 루프백).
+  - 지우려면 `k3d cluster delete agentops`.
+- **2주차는 끝났다 (T1~T13 전부 완료).** 남은 것은 트랙 결정과 상시 항목뿐이다.
 
 ---
 
-## 6. 미결·주의
+## 6. 다음 작업
 
-- **CLAUDE.md Gotcha 2줄 제안 — 미승인.** ① `rollout status` 함정(위 §3, 한 세션에 두 번 걸림)
-  ② 스크립트 출력에 `sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)` 고정
-  (Windows cp949가 `—` 하나에 죽고, 파이프는 블록 버퍼라 진행이 안 보인다). CLAUDE.md가
-  "제안 후 승인 대기"를 요구해 쓰지 않았다.
-- **§2·§3의 "안 고침"은 증거 기반 판단이고 뒤집을 수 있다.** audit은 "stdout → 로그 수집",
-  rate limit은 "`N`은 파드당 한도라는 계약 명시"로 적었다. 근거는 findings에 전부 있다.
-- **성공기준 #7은 선행 조건이 있다.** `GATEWAY_CIRCUIT_THRESHOLD`가 매니페스트에 없어 회로가
-  비활성이다. 기본 비활성은 stretch의 의도된 설계라 `k8s/base/`는 그대로 뒀다 — 켤지는 3주차 결정.
-- **D5 재결정이 여전히 막혀 있다.** 판단 근거가 "JD 5건"인데 수집은 **0건**.
+- **D5 재결정 — 3~4주차 착수 여부.** 2주차 findings는 다 나왔고 **판단 근거의 나머지
+  절반인 "JD 5건"이 여전히 0건이다.** 한 시간이면 2주짜리 결정을 검증한다. **최우선.**
+- **감사 F02/F25의 출처 확인** — 09-08에 무엇이 그 감사를 냈고 나머지 지적사항이
+  무엇이었는지. 지금은 지적 2건에 대한 대응만 커밋돼 있다.
+- **`TODOS.md` § D 미승인 4건** — 특히 D-4(`COPY . .`가 `uv sync`보다 앞이라 소스 한 줄에
+  의존성 레이어가 통째로 재빌드)는 이번 세션에도 그대로 남아 있다.
+- **specs → GitHub 이슈** (`gh` 인증 대기), **gstack 1.64.0.0 → 1.79.0.0**.
+
+---
+
+## 7. 미결·주의
+
+- **CLAUDE.md Gotcha 제안 — 여전히 미승인.** ① `rollout status` 함정(§3, 한 세션에 두 번
+  걸림) ② 스크립트 출력에 `sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)`.
+  ③ **신규 제안:** `host.docker.internal`은 세션마다 다른 가상 어댑터 IP로 풀린다 —
+  kubectl 타임아웃이면 클러스터가 아니라 이름 해석부터 의심할 것(두 세션 연속 재현).
+- **findings에 안 넣은 실측 2건 — 넣을지 결정 필요.** ① exec form/SIGTERM(§9와 같은
+  구간) ② Secret 오타 두 갈래(조용한 실패의 반례). 둘 다 §번호를 재번호하지 않고
+  덧붙일 수 있다.
+- **§2·§3의 "안 고침"은 증거 기반 판단이고 뒤집을 수 있다.** 근거는 findings에 전부 있다.
+- **성공기준 #7은 선행 조건이 있다.** `GATEWAY_CIRCUIT_THRESHOLD`가 매니페스트에 없어
+  회로가 비활성이다. 켤지는 3주차 결정.
 - **Evidence Box(A 트랙)는 PARKED 그대로.** 잠금 해제 조건(2차 대화 일정)에 변동 없음.
-- **성공기준 #10의 "97 테스트"는 현재 109다.** 취지(회귀 없음)는 유효해서 숫자만 설계
-  문서에 기록하고 본문은 두었다.
-- **gstack 업그레이드 가능:** 1.64.0.0 → 1.79.0.0. 두 세션 다 안 했다.
+- **성공기준 #10의 "97 테스트"는 현재 109다.** architecture.md는 이번에 정정했고,
+  설계 문서 본문은 취지(회귀 없음)가 유효해 그대로 뒀다.
