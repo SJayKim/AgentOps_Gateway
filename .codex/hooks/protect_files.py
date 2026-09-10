@@ -26,7 +26,7 @@ def affected_paths(data: dict[str, Any]) -> set[str]:
         if isinstance(patch, str):
             paths.update(PATCH_PATH.findall(patch))
             paths.update(MOVE_PATH.findall(patch))
-    return {path.strip().strip('"\'') for path in paths}
+    return {path.strip().strip("\"'") for path in paths}
 
 
 def protected(path: str) -> bool:
@@ -55,4 +55,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
