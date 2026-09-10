@@ -198,7 +198,7 @@ flowchart LR
 
 | # | 컴포넌트 | 파일 | 한 줄 책임 |
 |---|----------|------|-----------|
-| 🎯 | **조립·진입점** | `app.py` | FastAPI 앱 조립, `call_tool` 단일 경로에 6단계 배치, `/metrics`·`/health` 노출 |
+| 🎯 | **조립·진입점** | `app.py` | FastAPI 앱 조립, `call_tool` 단일 경로에 6단계 배치, `/metrics`·`/health`·`/ready` 노출 |
 | ① | **인증** | `auth.py` | 사전발급 JWT(HS256) 검증 → agent_id. 실패 사유 3종(missing/invalid/expired) |
 | ② | **레이트리밋** | `ratelimit.py` | 클라이언트별 token bucket. env 미설정이면 꺼짐 (stretch) |
 | ③ | **라우팅** | `routes.py` | tool 해석 → 정책 → 중계까지의 흐름 제어. 6단계 중 ②~⑥의 실제 몸통 |
@@ -303,9 +303,10 @@ AgentOps_Gateway/
 │
 ├── policies/policy.yaml      ← 권한 매트릭스(default-deny)
 ├── observability/            ← Prometheus + Grafana
+├── k8s/                      ← K8s 매니페스트 (base + overlays 3종)
 ├── scripts/                  ← 토큰 발급·e2e·점검 스크립트
 ├── docker-compose.yml        ← 풀스택 기동
-└── tests/                    ← unit + integration (97 그린)
+└── tests/                    ← unit + integration (109 그린)
 ```
 
 ---
