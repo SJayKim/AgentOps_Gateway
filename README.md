@@ -3,6 +3,16 @@
 여러 MCP 서버를 단일 진입점(:8000)으로 묶어 라우팅·인증·정책·감사·관측을
 담당하는 MCP Gateway. 스펙은 `docs/specs/` 참조.
 
+## K8s에서 배운 것 → [findings 전문](docs/k8s-stateful-findings.md)
+
+단일 노드 compose에서 잘 돌던 이 게이트웨이를 3노드 k3d에 올리고 `replicas: 3`으로 밀었다.
+
+- **다섯 군데가 깨졌는데 트레이드오프가 있는 결정은 하나였다** — 세션 전략만 stateless로
+  바꿨고(e2e 0/6 → 6/6), audit·rate limit·circuit breaker는 **서로 다른 근거로 "안 고침"** 이 결론.
+- **틀린 것보다 조용한 게 위험하다** — 설정이 접수되기만 하고 동작하지 않는 실패 4종
+  (affinity 무동작 / audit 조각 / ticket 빈 결과 / `rollout status`의 완료 오보).
+- **`/ready`만 거짓말하지 않았다** — 상태를 묻는 대신 `send_ping()`으로 왕복을 시켰기 때문이다.
+
 ## 아키텍처
 
 ```
