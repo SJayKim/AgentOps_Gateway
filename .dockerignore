@@ -6,3 +6,9 @@ __pycache__/
 tickets.db
 docs/
 tests/
+# 비밀·런타임 산출물·로컬 캐시 — COPY . . 가 이미지에 굽지 않도록 (감사 F02/F25)
+.env
+audit/
+.gstack/
+.pytest_cache/
+.ruff_cache/
